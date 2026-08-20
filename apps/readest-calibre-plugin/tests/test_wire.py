@@ -14,6 +14,7 @@ from wire import (  # noqa: E402
     build_wire_book,
     calibre_columns,
     cloud_book_hashes,
+    common_supported_formats,
     cover_file_name,
     index_rows_by_uuid,
     iso_to_ms,
@@ -23,7 +24,9 @@ from wire import (  # noqa: E402
     pick_format,
     pick_server_row,
     plan_push,
+    resolve_format,
     should_bulk_list,
+    supported_formats,
     tombstone_record,
 )
 
@@ -89,6 +92,9 @@ def synced_row(wire):
 
 
 class PickFormatTest(unittest.TestCase):
+    def test_supported_formats_filters_and_orders(self):
+        self.assertEqual(supported_formats(['pdf', 'DOCX', 'EPUB', 'mobi']), ['EPUB', 'PDF', 'MOBI'])
+
     def test_prefers_epub(self):
         self.assertEqual(pick_format(['MOBI', 'EPUB', 'PDF']), 'EPUB')
 
@@ -100,6 +106,29 @@ class PickFormatTest(unittest.TestCase):
 
     def test_empty(self):
         self.assertIsNone(pick_format([]))
+
+    def test_resolve_default_uses_priority(self):
+        self.assertEqual(resolve_format(['PDF', 'EPUB']), 'EPUB')
+
+    def test_resolve_requested_format(self):
+        self.assertEqual(resolve_format(['PDF', 'EPUB'], 'pdf'), 'PDF')
+
+    def test_resolve_requested_format_must_be_available(self):
+        self.assertIsNone(resolve_format(['EPUB'], 'PDF'))
+
+    def test_common_supported_formats(self):
+        self.assertEqual(
+            common_supported_formats([
+                ['EPUB', 'PDF', 'MOBI'],
+                ['pdf', 'AZW3', 'EPUB'],
+                ['TXT', 'EPUB', 'PDF'],
+            ]),
+            ['EPUB', 'PDF'],
+        )
+
+    def test_common_supported_formats_empty_or_no_common(self):
+        self.assertEqual(common_supported_formats([]), [])
+        self.assertEqual(common_supported_formats([['EPUB'], ['PDF']]), [])
 
 
 class BuildMetadataTest(unittest.TestCase):

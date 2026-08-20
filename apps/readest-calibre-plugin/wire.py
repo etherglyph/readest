@@ -58,13 +58,35 @@ def merge_marks(existing, new_marks):
     return merged
 
 
+def supported_formats(available):
+    """Readest-supported formats present in `available`, in priority order."""
+    upper = {f.upper() for f in (available or [])}
+    return [fmt for fmt in FORMAT_PRIORITY if fmt in upper]
+
+
+def common_supported_formats(available_by_book):
+    """Readest-supported formats every selected book has, in priority order."""
+    selections = list(available_by_book or [])
+    if not selections:
+        return []
+    common = set(supported_formats(selections[0]))
+    for available in selections[1:]:
+        common &= set(supported_formats(available))
+    return [fmt for fmt in FORMAT_PRIORITY if fmt in common]
+
+
 def pick_format(available):
     """Best Readest-supported format among calibre's, or None."""
-    upper = {f.upper() for f in available}
-    for fmt in FORMAT_PRIORITY:
-        if fmt in upper:
-            return fmt
-    return None
+    formats = supported_formats(available)
+    return formats[0] if formats else None
+
+
+def resolve_format(available, requested=None):
+    """Requested format when present, otherwise the default priority pick."""
+    if requested:
+        requested = requested.upper()
+        return requested if requested in supported_formats(available) else None
+    return pick_format(available)
 
 
 def book_file_name(file_hash, fmt):
