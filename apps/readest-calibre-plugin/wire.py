@@ -351,8 +351,8 @@ def plan_push(server_row, wire, local_cover_hash, source_hash, blob_present=True
     Returns {'action': 'new' | 'replace' | 'update' | 'skip',
              'upload_cover': bool}.
     - new:     no server row — embed metadata, upload file, insert row
-    - replace: the raw file changed (or the row has no file blob) — upload a
-               fresh embedded blob under its new hash, tombstone the old row
+    - replace: the raw file/format changed (or the row has no file blob) —
+               upload a fresh embedded blob under its new hash, tombstone the old row
     - update:  file unchanged, but metadata/cover/tombstone differ — row only
     - skip:    file + metadata + cover all unchanged
 
@@ -371,6 +371,7 @@ def plan_push(server_row, wire, local_cover_hash, source_hash, blob_present=True
     if (
         not server_row.get('uploaded_at')
         or row_source_hash(server_row) != source_hash
+        or (server_row.get('format') or '').upper() != (wire.get('format') or '').upper()
         or not _resolve_blob_present(blob_present, server_row['book_hash'])
     ):
         # A replaced book gets a new hash namespace, so it needs its own cover.
