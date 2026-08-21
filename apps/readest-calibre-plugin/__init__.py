@@ -8,7 +8,7 @@ try:
 except NameError:
     pass
 
-PLUGIN_VERSION = (0, 12, 12)
+PLUGIN_VERSION = (0, 12, 16)
 
 
 class ReadestPlugin(InterfaceActionBase):
