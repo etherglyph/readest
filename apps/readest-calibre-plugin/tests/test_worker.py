@@ -11,15 +11,31 @@ import api as readest_api  # noqa: E402
 import wire as readest_wire  # noqa: E402
 
 
-class _Signal:
-    def __init__(self, *args):
-        pass
+class _BoundSignal:
+    def __init__(self):
+        self._slots = []
 
-    def connect(self, *args):
-        pass
+    def connect(self, slot):
+        self._slots.append(slot)
 
     def emit(self, *args):
-        pass
+        for slot in self._slots:
+            slot(*args)
+
+
+class _Signal:
+    def __init__(self, *args):
+        self.name = None
+
+    def __set_name__(self, owner, name):
+        self.name = '_signal_' + name
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        if self.name not in instance.__dict__:
+            instance.__dict__[self.name] = _BoundSignal()
+        return instance.__dict__[self.name]
 
 
 class _QThread:
@@ -41,7 +57,7 @@ sys.modules['calibre_plugins.readest'] = readest_package
 sys.modules['calibre_plugins.readest.api'] = readest_api
 sys.modules['calibre_plugins.readest.wire'] = readest_wire
 
-from worker import _CloudWorker  # noqa: E402
+from worker import StatusWorker, _CloudWorker  # noqa: E402
 
 
 class Metadata:
@@ -82,6 +98,14 @@ class FakeDB:
 
     def cover(self, book_id):
         return None
+
+
+class FakeClient:
+    def pull_books(self):
+        return []
+
+    def list_files_page(self, page):
+        return [], 1
 
 
 class WorkerFormatPlanningTest(unittest.TestCase):
@@ -137,6 +161,53 @@ class WorkerFormatPlanningTest(unittest.TestCase):
         ctx, reason = self.make_worker(['DOCX'], 'DOCX')._plan_for(1)
         self.assertIsNone(ctx)
         self.assertIn('Requested format DOCX', reason)
+
+
+class WorkerStatusFormatReportingTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.paths = {}
+        for fmt, body in (('EPUB', b'epub bytes'), ('PDF', b'pdf bytes')):
+            path = os.path.join(self.tmp.name, 'book.%s' % fmt.lower())
+            with open(path, 'wb') as handle:
+                handle.write(body)
+            self.paths[fmt] = path
+
+    def run_status_worker(self, formats, requested_format=None):
+        worker = StatusWorker(
+            None,
+            FakeDB(formats, self.paths),
+            [1],
+            FakeClient(),
+            False,
+            requested_format,
+        )
+        rows = []
+        done = []
+        worker.book_status.connect(lambda *args: rows.append(args))
+        worker.done.connect(lambda *args: done.append(args))
+        worker.run()
+        return rows, done
+
+    def test_status_worker_reports_default_chosen_format(self):
+        rows, done = self.run_status_worker(['PDF', 'EPUB'])
+
+        self.assertEqual(rows, [(1, 'new', 'EPUB', '')])
+        self.assertEqual(done[0][0], True)
+
+    def test_status_worker_reports_requested_chosen_format(self):
+        rows, done = self.run_status_worker(['PDF', 'EPUB'], 'PDF')
+
+        self.assertEqual(rows, [(1, 'new', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+
+    def test_status_worker_has_no_format_when_none_is_chosen(self):
+        rows, done = self.run_status_worker(['EPUB'], 'PDF')
+
+        self.assertEqual(rows[0][:3], (1, 'failed', ''))
+        self.assertIn('Requested format PDF', rows[0][3])
+        self.assertEqual(done[0][0], False)
 
 
 if __name__ == '__main__':

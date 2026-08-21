@@ -152,7 +152,7 @@ class _CloudWorker(QThread):
     """
 
     progress = pyqtSignal(int, int)  # done, total
-    book_status = pyqtSignal(int, str, str)  # book_id, status key, detail
+    book_status = pyqtSignal(int, str, str, str)  # book_id, status key, format, detail
     done = pyqtSignal(bool, str)  # ok, message
 
     def __init__(
@@ -284,24 +284,24 @@ class PushWorker(_CloudWorker):
                 self.done.emit(False, _('Canceled.'))
                 return
             try:
-                status, detail = self._push_one(book_id)
+                status, fmt, detail = self._push_one(book_id)
             except QuotaExceededError as err:
-                self.book_status.emit(book_id, 'failed', str(err))
+                self.book_status.emit(book_id, 'failed', '', str(err))
                 self.done.emit(False, _('Readest storage quota exceeded — push stopped.'))
                 return
             except AuthRequiredError as err:
-                self.book_status.emit(book_id, 'failed', str(err))
+                self.book_status.emit(book_id, 'failed', '', str(err))
                 self.done.emit(False, _('Session expired — please log in again.'))
                 return
             except Exception as err:
                 traceback.print_exc()
-                status, detail = 'failed', str(err)
+                status, fmt, detail = 'failed', '', str(err)
             counts[status] = counts.get(status, 0) + 1
             if status != 'failed':
                 # Whatever the outcome, the book is now in the cloud, so keep
                 # any marks a previous status check left from going stale.
                 self.marks[book_id] = PUSHED_MARK
-            self.book_status.emit(book_id, status, detail)
+            self.book_status.emit(book_id, status, fmt, detail)
             self.progress.emit(index + 1, len(self.book_ids))
 
         self.done.emit(
@@ -360,7 +360,7 @@ class PushWorker(_CloudWorker):
     def _push_one(self, book_id):
         ctx, reason = self._plan_for(book_id)
         if ctx is None:
-            return 'failed', reason
+            return 'failed', '', reason
 
         mi, fmt, path = ctx.mi, ctx.fmt, ctx.path
         cover_bytes, cover_hash = ctx.cover_bytes, ctx.cover_hash
@@ -379,8 +379,8 @@ class PushWorker(_CloudWorker):
                 for record in tombstones:
                     self._delete_cloud_files(record['bookHash'])
                 self._remember_tombstones(tombstones)
-                return 'updated', ''
-            return 'skipped', ''
+                return 'updated', fmt, ''
+            return 'skipped', fmt, ''
 
         if plan['action'] in ('new', 'replace'):
             blob_path = _embed_metadata_copy(path, mi, fmt)
@@ -418,7 +418,7 @@ class PushWorker(_CloudWorker):
                 self._delete_cloud_files(record['bookHash'])
             self._remember(records[0], uuid)
             self._remember_tombstones(tombstones)
-            return ('replaced' if plan['action'] == 'replace' else 'uploaded'), ''
+            return ('replaced' if plan['action'] == 'replace' else 'uploaded'), fmt, ''
 
         # action == 'update': the cloud file is current, only the row (and
         # possibly the cover) changed. Keep the row's hash namespace.
@@ -437,7 +437,7 @@ class PushWorker(_CloudWorker):
         self._remember_tombstones(tombstones)
         for tombstone in tombstones:
             self._delete_cloud_files(tombstone['bookHash'])
-        return 'updated', ''
+        return 'updated', fmt, ''
 
 
 class StatusWorker(_CloudWorker):
@@ -456,14 +456,17 @@ class StatusWorker(_CloudWorker):
                 return
             try:
                 ctx, reason = self._plan_for(book_id)
-                status, detail = (ctx.plan['action'], '') if ctx else ('failed', reason)
+                if ctx:
+                    status, fmt, detail = ctx.plan['action'], ctx.fmt, ''
+                else:
+                    status, fmt, detail = 'failed', '', reason
             except Exception as err:
                 traceback.print_exc()
-                status, detail = 'failed', str(err)
+                status, fmt, detail = 'failed', '', str(err)
             if status in PLAN_MARKS:
                 self.marks[book_id] = PLAN_MARKS[status]
             counts[status] = counts.get(status, 0) + 1
-            self.book_status.emit(book_id, status, detail)
+            self.book_status.emit(book_id, status, fmt, detail)
             self.progress.emit(index + 1, len(self.book_ids))
 
         self.done.emit(
