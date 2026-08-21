@@ -91,7 +91,7 @@ class ReadestInterfacePlugin(InterfaceAction):
     def check_selected(self):
         self.run_on_selection(StatusDialog, 'Select the books to check against Readest.')
 
-    def run_on_selection(self, dialog_class, no_selection_message):
+    def run_on_selection(self, dialog_class, no_selection_message, requested_format=None):
         book_ids = self.selected_book_ids()
         if not book_ids:
             return error_dialog(
@@ -105,6 +105,7 @@ class ReadestInterfacePlugin(InterfaceAction):
             book_ids,
             make_client(),
             bool(prefs['include_custom_columns']),
+            requested_format,
         )
         dialog.exec()
         self.apply_marks(dialog.marks)
