@@ -22,6 +22,7 @@ from wire import (  # noqa: E402
     merge_marks,
     ms_to_iso,
     pick_format,
+    pick_server_binding,
     pick_server_row,
     plan_push,
     resolve_format,
@@ -582,6 +583,39 @@ class ServerRowLookupTest(unittest.TestCase):
         dead = server_row(deleted_at='2024-06-01T00:00:00.000Z')
         self.assertIs(pick_server_row(None, dead), dead)
         self.assertIsNone(pick_server_row(None, None))
+
+    def test_binding_uses_hash_match_for_first_binding(self):
+        hash_row = server_row()
+        row, duplicates = pick_server_binding(hash_row, None)
+        self.assertIs(row, hash_row)
+        self.assertEqual(duplicates, [])
+
+    def test_binding_prefers_uuid_peer_over_hash_match(self):
+        hash_row = server_row(book_hash='h' * 32)
+        uuid_row = server_row(book_hash='u' * 32)
+        row, duplicates = pick_server_binding(hash_row, uuid_row)
+        self.assertIs(row, uuid_row)
+        self.assertEqual(duplicates, [hash_row])
+
+    def test_binding_does_not_tombstone_the_same_row(self):
+        row = server_row()
+        canonical, duplicates = pick_server_binding(row, row)
+        self.assertIs(canonical, row)
+        self.assertEqual(duplicates, [])
+
+    def test_binding_ignores_already_tombstoned_hash_duplicate(self):
+        hash_row = server_row(book_hash='h' * 32, deleted_at='2024-06-01T00:00:00.000Z')
+        uuid_row = server_row(book_hash='u' * 32)
+        row, duplicates = pick_server_binding(hash_row, uuid_row)
+        self.assertIs(row, uuid_row)
+        self.assertEqual(duplicates, [])
+
+    def test_binding_uuid_peer_wins_even_when_tombstoned(self):
+        hash_row = server_row(book_hash='h' * 32)
+        uuid_row = server_row(book_hash='u' * 32, deleted_at='2024-06-01T00:00:00.000Z')
+        row, duplicates = pick_server_binding(hash_row, uuid_row)
+        self.assertIs(row, uuid_row)
+        self.assertEqual(duplicates, [hash_row])
 
 
 class TombstoneRecordTest(unittest.TestCase):

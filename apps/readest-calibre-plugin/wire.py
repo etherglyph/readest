@@ -330,6 +330,25 @@ def pick_server_row(hash_row, uuid_row):
     return hash_row if hash_row is not None else uuid_row
 
 
+def pick_server_binding(hash_row, uuid_row):
+    """Canonical row plus live duplicates that must be tombstoned.
+
+    Once a row carries the Calibre uuid it is the stable peer for that Calibre
+    book, even when the selected file hash also matches a separate direct
+    Readest upload. Hash matching is only the first-binding fallback.
+    """
+    if uuid_row is not None:
+        duplicates = []
+        if (
+            hash_row is not None
+            and hash_row.get('book_hash') != uuid_row.get('book_hash')
+            and not hash_row.get('deleted_at')
+        ):
+            duplicates.append(hash_row)
+        return uuid_row, duplicates
+    return hash_row, []
+
+
 def should_bulk_list(total_pages, selected_books):
     """Whether paging the whole storage listing beats per-book lookups.
 
