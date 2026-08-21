@@ -9,7 +9,7 @@ from calibre.gui2.actions import InterfaceAction
 from calibre_plugins.readest.api import ReadestClient
 from calibre_plugins.readest.config import prefs, save_tokens
 from calibre_plugins.readest.dialogs import LoginDialog, PushDialog, StatusDialog
-from calibre_plugins.readest.wire import merge_marks
+from calibre_plugins.readest.wire import common_supported_formats, merge_marks
 
 try:
     load_translations()
@@ -65,6 +65,8 @@ class ReadestInterfacePlugin(InterfaceAction):
 
         self.menu = QMenu(self.gui)
         self.menu.addAction(self.push_action)
+        self.push_format_menu = QMenu('Push selected books as…', self.gui)
+        self.push_format_action = self.menu.addMenu(self.push_format_menu)
         self.menu.addAction(self.check_action)
         self.menu.addSeparator()
         self.menu.addAction(self.login_action)
@@ -86,6 +88,7 @@ class ReadestInterfacePlugin(InterfaceAction):
         selected = len(self.selected_book_ids()) > 0
         self.push_action.setEnabled(selected)
         self.check_action.setEnabled(selected)
+        self.update_push_format_menu()
 
     def selected_book_ids(self):
         return self.gui.library_view.get_selected_ids()
@@ -93,8 +96,38 @@ class ReadestInterfacePlugin(InterfaceAction):
     def push_selected(self):
         self.run_on_selection(PushDialog, _('Select the books to push to Readest.'))
 
+    def push_selected_format(self, requested_format):
+        self.run_on_selection(
+            PushDialog,
+            'Select the books to push to Readest.',
+            requested_format=requested_format,
+        )
+
     def check_selected(self):
         self.run_on_selection(StatusDialog, _('Select the books to check against Readest.'))
+
+    def common_selected_formats(self):
+        book_ids = self.selected_book_ids()
+        if not book_ids:
+            return []
+        db = self.gui.current_db.new_api
+        return common_supported_formats(db.formats(book_id) for book_id in book_ids)
+
+    def update_push_format_menu(self):
+        formats = self.common_selected_formats()
+        self.push_format_menu.clear()
+        show_menu = len(formats) > 1
+        self.push_format_action.setVisible(show_menu)
+        self.push_format_action.setEnabled(show_menu)
+        if not show_menu:
+            return
+        for fmt in formats:
+            action = self.push_format_menu.addAction(fmt)
+            action.triggered.connect(
+                lambda checked=False, requested_format=fmt: self.push_selected_format(
+                    requested_format
+                )
+            )
 
     def run_on_selection(self, dialog_class, no_selection_message, requested_format=None):
         book_ids = self.selected_book_ids()
