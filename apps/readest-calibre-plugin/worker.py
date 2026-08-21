@@ -30,9 +30,9 @@ from calibre_plugins.readest.wire import (
     index_rows_by_uuid,
     merge_for_push,
     ms_to_iso,
-    pick_format,
     pick_server_binding,
     plan_push,
+    resolve_format,
     should_bulk_list,
     tombstone_record,
     tombstone_records,
@@ -155,12 +155,21 @@ class _CloudWorker(QThread):
     book_status = pyqtSignal(int, str, str)  # book_id, status key, detail
     done = pyqtSignal(bool, str)  # ok, message
 
-    def __init__(self, parent, db, book_ids, client, include_custom_columns):
+    def __init__(
+        self,
+        parent,
+        db,
+        book_ids,
+        client,
+        include_custom_columns,
+        requested_format=None,
+    ):
         QThread.__init__(self, parent)
         self.db = db  # calibre new_api (thread-safe)
         self.book_ids = list(book_ids)
         self.client = client
         self.include_custom_columns = include_custom_columns
+        self.requested_format = requested_format.upper() if requested_format else None
         self.canceled = False
         self.marks = {}  # book_id -> calibre mark label
         self.cloud_hashes = None  # whole-account listing, when it is worth paging
@@ -224,8 +233,14 @@ class _CloudWorker(QThread):
     def _plan_for(self, book_id):
         """(_BookPlan, '') for one book, or (None, reason) when it cannot be pushed."""
         mi = self.db.get_metadata(book_id)
-        fmt = pick_format(self.db.formats(book_id))
+        fmt = resolve_format(self.db.formats(book_id), self.requested_format)
         if fmt is None:
+            if self.requested_format:
+                return (
+                    None,
+                    _('Requested format %s is not available or supported for this book')
+                    % self.requested_format,
+                )
             return None, _('No Readest-supported format (EPUB, PDF, ...)')
         path = self.db.format_abspath(book_id, fmt)
         if not path or not os.path.exists(path):

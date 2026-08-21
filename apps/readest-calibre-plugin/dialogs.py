@@ -175,7 +175,9 @@ class _RunDialog(QDialog):
         """Heading line for a run over `count` books (translated plural)."""
         return ''
 
-    def __init__(self, parent, db, book_ids, client, include_custom_columns):
+    def __init__(
+        self, parent, db, book_ids, client, include_custom_columns, requested_format=None
+    ):
         QDialog.__init__(self, parent)
         self.db = db
         self.marks = {}
@@ -207,7 +209,9 @@ class _RunDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
 
-        self.worker = self.worker_class(self, db, book_ids, client, include_custom_columns)
+        self.worker = self.worker_class(
+            self, db, book_ids, client, include_custom_columns, requested_format
+        )
         self.worker.progress.connect(self.on_progress)
         self.worker.book_status.connect(self.on_book_status)
         self.worker.done.connect(self.on_done)
