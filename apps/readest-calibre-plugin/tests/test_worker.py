@@ -1,4 +1,6 @@
 import os
+import json
+import shutil
 import sys
 import tempfile
 import types
@@ -57,7 +59,8 @@ sys.modules['calibre_plugins.readest'] = readest_package
 sys.modules['calibre_plugins.readest.api'] = readest_api
 sys.modules['calibre_plugins.readest.wire'] = readest_wire
 
-from worker import StatusWorker, _CloudWorker  # noqa: E402
+import worker as readest_worker  # noqa: E402
+from worker import PushWorker, StatusWorker, _CloudWorker  # noqa: E402
 
 
 class Metadata:
@@ -101,11 +104,69 @@ class FakeDB:
 
 
 class FakeClient:
+    def __init__(self, rows=None, files=None):
+        self.rows = list(rows or [])
+        self.files = list(files or [])
+        self.upload_requests = []
+        self.uploads = []
+        self.pushed_batches = []
+        self.deleted_files = []
+
     def pull_books(self):
-        return []
+        return list(self.rows)
 
     def list_files_page(self, page):
-        return [], 1
+        return list(self.files), 1
+
+    def list_files(self, book_hash):
+        marker = '/Readest/Books/%s/' % book_hash
+        return [record for record in self.files if marker in record.get('file_key', '')]
+
+    def get_upload_url(self, file_name, size, book_hash):
+        self.upload_requests.append(
+            {'fileName': file_name, 'size': size, 'bookHash': book_hash}
+        )
+        return {'uploadUrl': 'memory://' + file_name}
+
+    def put_file(self, upload_url, fileobj, size):
+        self.uploads.append(
+            {'uploadUrl': upload_url, 'size': size, 'body': fileobj.read()}
+        )
+
+    def push_books(self, records):
+        self.pushed_batches.append(list(records))
+
+    def delete_file(self, file_key):
+        self.deleted_files.append(file_key)
+
+
+def cloud_file(book_hash, fmt):
+    return {'file_key': 'user-1/' + readest_wire.book_file_name(book_hash, fmt)}
+
+
+def server_row(book_hash, fmt, metadata=None):
+    return {
+        'book_hash': book_hash,
+        'meta_hash': 'm' * 32,
+        'format': fmt,
+        'title': 'The Test Book',
+        'author': 'Alice Author',
+        'tags': [],
+        'metadata': json.dumps(metadata) if metadata is not None else None,
+        'created_at': '2024-01-01T00:00:00.000Z',
+        'updated_at': '2024-01-02T00:00:00.000Z',
+        'deleted_at': None,
+        'uploaded_at': '2024-01-01T12:00:00.000Z',
+    }
+
+
+def calibre_metadata(source_hash):
+    return {
+        'title': 'The Test Book',
+        'author': 'Alice Author',
+        'identifier': 'urn:uuid:cafebabe-0000-0000-0000-000000000001',
+        'calibreSourceHash': source_hash,
+    }
 
 
 class WorkerFormatPlanningTest(unittest.TestCase):
@@ -208,6 +269,98 @@ class WorkerStatusFormatReportingTest(unittest.TestCase):
         self.assertEqual(rows[0][:3], (1, 'failed', ''))
         self.assertIn('Requested format PDF', rows[0][3])
         self.assertEqual(done[0][0], False)
+
+
+class WorkerPushFormatBindingTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.paths = {}
+        for fmt, body in (('EPUB', b'epub bytes'), ('PDF', b'pdf bytes')):
+            path = os.path.join(self.tmp.name, 'book.%s' % fmt.lower())
+            with open(path, 'wb') as handle:
+                handle.write(body)
+            self.paths[fmt] = path
+        self.epub_hash = readest_api.partial_md5(self.paths['EPUB'])
+        self.pdf_hash = readest_api.partial_md5(self.paths['PDF'])
+        self.original_embed = readest_worker._embed_metadata_copy
+        readest_worker._embed_metadata_copy = self.embed_metadata_copy
+        self.addCleanup(self.restore_embed_metadata_copy)
+
+    def restore_embed_metadata_copy(self):
+        readest_worker._embed_metadata_copy = self.original_embed
+
+    def embed_metadata_copy(self, path, mi, fmt):
+        fd, tmp = tempfile.mkstemp(
+            suffix='.' + fmt.lower(), prefix='embedded-', dir=self.tmp.name
+        )
+        os.close(fd)
+        shutil.copyfile(path, tmp)
+        return tmp
+
+    def run_push(self, client, requested_format=None):
+        worker = PushWorker(
+            None,
+            FakeDB(['EPUB', 'PDF'], self.paths),
+            [1],
+            client,
+            False,
+            requested_format,
+        )
+        rows = []
+        done = []
+        worker.book_status.connect(lambda *args: rows.append(args))
+        worker.done.connect(lambda *args: done.append(args))
+        worker.run()
+        return rows, done
+
+    def test_requested_format_replaces_existing_uuid_peer_without_duplicate(self):
+        old_hash = 'e' * 32
+        existing = server_row(old_hash, 'EPUB', calibre_metadata(self.epub_hash))
+        client = FakeClient([existing], [cloud_file(old_hash, 'EPUB')])
+
+        rows, done = self.run_push(client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'replaced', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(
+            client.upload_requests[0]['fileName'],
+            readest_wire.book_file_name(self.pdf_hash, 'PDF'),
+        )
+        self.assertEqual(len(client.pushed_batches), 1)
+        live = [record for record in client.pushed_batches[0] if not record.get('deletedAt')]
+        tombstones = [record for record in client.pushed_batches[0] if record.get('deletedAt')]
+        self.assertEqual(len(live), 1)
+        self.assertEqual(len(tombstones), 1)
+        self.assertEqual(live[0]['bookHash'], self.pdf_hash)
+        self.assertEqual(live[0]['format'], 'PDF')
+        self.assertEqual(
+            live[0]['metadata']['identifier'],
+            'urn:uuid:cafebabe-0000-0000-0000-000000000001',
+        )
+        self.assertEqual(tombstones[0]['bookHash'], old_hash)
+        self.assertIn(old_hash, ''.join(client.deleted_files))
+
+    def test_first_push_binds_existing_hash_match_without_uploading_duplicate(self):
+        existing = server_row(self.pdf_hash, 'PDF')
+        client = FakeClient([existing], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_push(client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'updated', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(client.upload_requests, [])
+        self.assertEqual(client.uploads, [])
+        self.assertEqual(len(client.pushed_batches), 1)
+        self.assertEqual(len(client.pushed_batches[0]), 1)
+        record = client.pushed_batches[0][0]
+        self.assertEqual(record['bookHash'], self.pdf_hash)
+        self.assertEqual(record['format'], 'PDF')
+        self.assertEqual(
+            record['metadata']['identifier'],
+            'urn:uuid:cafebabe-0000-0000-0000-000000000001',
+        )
+        self.assertIsNone(record['deletedAt'])
 
 
 if __name__ == '__main__':
