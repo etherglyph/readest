@@ -75,6 +75,10 @@ class Metadata:
     series_index = None
     uuid = 'cafebabe-0000-0000-0000-000000000001'
 
+    def __init__(self, uuid=None):
+        if uuid is not None:
+            self.uuid = uuid
+
     def get_identifiers(self):
         return {}
 
@@ -98,6 +102,25 @@ class FakeDB:
 
     def format_abspath(self, book_id, fmt):
         return self._paths.get(fmt.upper())
+
+    def cover(self, book_id):
+        return None
+
+
+class FakeMultiDB:
+    def __init__(self, formats_by_book, paths_by_book, uuids_by_book):
+        self.formats_by_book = formats_by_book
+        self.paths_by_book = paths_by_book
+        self.uuids_by_book = uuids_by_book
+
+    def get_metadata(self, book_id):
+        return Metadata(self.uuids_by_book[book_id])
+
+    def formats(self, book_id):
+        return list(self.formats_by_book[book_id])
+
+    def format_abspath(self, book_id, fmt):
+        return self.paths_by_book[book_id].get(fmt.upper())
 
     def cover(self, book_id):
         return None
@@ -162,12 +185,12 @@ def server_row(book_hash, fmt, metadata=None, **overrides):
     return row
 
 
-def calibre_metadata(source_hash):
+def calibre_metadata(source_hash, uuid=Metadata.uuid):
     return {
         'title': 'The Test Book',
         'author': 'Alice Author',
         'language': 'eng',
-        'identifier': 'urn:uuid:cafebabe-0000-0000-0000-000000000001',
+        'identifier': 'urn:uuid:%s' % uuid,
         'calibreSourceHash': source_hash,
     }
 
@@ -342,10 +365,18 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
         return tmp
 
     def run_push(self, client, requested_format=None):
-        worker = PushWorker(
-            None,
+        return self.run_push_with_db(
             FakeDB(['EPUB', 'PDF'], self.paths),
             [1],
+            client,
+            requested_format,
+        )
+
+    def run_push_with_db(self, db, book_ids, client, requested_format=None):
+        worker = PushWorker(
+            None,
+            db,
+            book_ids,
             client,
             False,
             requested_format,
@@ -356,6 +387,15 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
         worker.done.connect(lambda *args: done.append(args))
         worker.run()
         return rows, done
+
+    def add_book_files(self, book_id):
+        paths = {}
+        for fmt in ('EPUB', 'PDF'):
+            path = os.path.join(self.tmp.name, 'book-%s.%s' % (book_id, fmt.lower()))
+            with open(path, 'wb') as handle:
+                handle.write(('%s %s bytes' % (book_id, fmt)).encode('ascii'))
+            paths[fmt] = path
+        return paths
 
     def direct_pdf_row(self):
         return server_row(
@@ -474,6 +514,53 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
             'urn:uuid:cafebabe-0000-0000-0000-000000000001',
         )
         self.assertIsNone(record['deletedAt'])
+
+    def test_default_push_respects_bound_formats_for_bulk_selection(self):
+        book_ids = [1, 2, 3, 4, 5]
+        uuids = {
+            book_id: 'cafebabe-0000-0000-0000-%012d' % book_id
+            for book_id in book_ids
+        }
+        formats_by_book = {book_id: ['EPUB', 'PDF'] for book_id in book_ids}
+        paths_by_book = {book_id: self.add_book_files(book_id) for book_id in book_ids}
+        bound_formats = {
+            1: 'PDF',
+            2: 'EPUB',
+            3: 'PDF',
+            4: 'EPUB',
+            5: 'PDF',
+        }
+        rows = []
+        files = []
+        for book_id in book_ids:
+            fmt = bound_formats[book_id]
+            book_hash = readest_api.partial_md5(paths_by_book[book_id][fmt])
+            rows.append(server_row(book_hash, fmt, calibre_metadata(book_hash, uuids[book_id])))
+            files.append(cloud_file(book_hash, fmt))
+        client = FakeClient(rows, files)
+        db = FakeMultiDB(formats_by_book, paths_by_book, uuids)
+
+        status_rows, done = self.run_push_with_db(db, book_ids, client)
+
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(
+            [(book_id, status, fmt) for book_id, status, fmt, detail in status_rows],
+            [(book_id, 'skipped', bound_formats[book_id]) for book_id in book_ids],
+        )
+        self.assertEqual(client.upload_requests, [])
+        self.assertEqual(client.pushed_batches, [])
+
+    def test_default_push_fails_when_bound_format_is_missing_locally(self):
+        existing = server_row(self.pdf_hash, 'PDF', calibre_metadata(self.pdf_hash))
+        client = FakeClient([existing], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_push_with_db(FakeDB(['EPUB'], self.paths), [1], client)
+
+        self.assertEqual(rows[0][:3], (1, 'failed', ''))
+        self.assertIn('Bound format PDF', rows[0][3])
+        self.assertEqual(done[0][0], False)
+        self.assertEqual(client.upload_requests, [])
+        self.assertEqual(client.pushed_batches, [])
 
 
 if __name__ == '__main__':

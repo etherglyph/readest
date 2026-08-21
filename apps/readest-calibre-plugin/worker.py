@@ -232,7 +232,13 @@ class _CloudWorker(QThread):
 
     def _format_constraint(self, mi):
         """(format, source) to force for this book, or (None, None)."""
-        return (self.requested_format, 'requested') if self.requested_format else (None, None)
+        if self.requested_format:
+            return self.requested_format, 'requested'
+        uuid = (getattr(mi, 'uuid', None) or '').lower()
+        row = self.by_uuid.get(uuid) if uuid else None
+        if row is not None and not row.get('deleted_at') and row.get('format'):
+            return row['format'].upper(), 'bound'
+        return None, None
 
     def _plan_for(self, book_id):
         """(_BookPlan, '') for one book, or (None, reason) when it cannot be pushed."""
@@ -448,15 +454,6 @@ class PushWorker(_CloudWorker):
 
 class StatusWorker(_CloudWorker):
     """Plans every selected book without uploading, and marks the results."""
-
-    def _format_constraint(self, mi):
-        if self.requested_format:
-            return self.requested_format, 'requested'
-        uuid = (getattr(mi, 'uuid', None) or '').lower()
-        row = self.by_uuid.get(uuid) if uuid else None
-        if row is not None and not row.get('deleted_at') and row.get('format'):
-            return row['format'].upper(), 'bound'
-        return None, None
 
     def run(self):
         error = self._load_cloud_state()
