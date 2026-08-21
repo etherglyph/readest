@@ -11,6 +11,8 @@ inverted — same as readest.koplugin's row_to_wire).
 
 import json
 from datetime import datetime, timezone
+from functools import reduce
+from operator import and_
 
 try:  # inside calibre the plugin loads as a package
     from calibre_plugins.readest.api import meta_hash
@@ -69,9 +71,7 @@ def common_supported_formats(available_by_book):
     selections = list(available_by_book or [])
     if not selections:
         return []
-    common = set(supported_formats(selections[0]))
-    for available in selections[1:]:
-        common &= set(supported_formats(available))
+    common = reduce(and_, (set(supported_formats(available)) for available in selections))
     return [fmt for fmt in FORMAT_PRIORITY if fmt in common]
 
 
