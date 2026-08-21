@@ -185,10 +185,12 @@ class _RunDialog(QDialog):
         self.progress_bar.setRange(0, count)
         layout.addWidget(self.progress_bar)
 
-        self.table = QTableWidget(0, 3, self)
-        self.table.setHorizontalHeaderLabels(['Book', 'Status', 'Details'])
+        self.table = QTableWidget(0, 4, self)
+        self.table.setHorizontalHeaderLabels(['Book', 'Format', 'Status', 'Details'])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 220)
+        self.table.setColumnWidth(1, 70)
+        self.table.setColumnWidth(2, 90)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table)
 
@@ -211,13 +213,14 @@ class _RunDialog(QDialog):
     def on_progress(self, done, total):
         self.progress_bar.setValue(done)
 
-    def on_book_status(self, book_id, status, detail):
+    def on_book_status(self, book_id, status, fmt, detail):
         title = self.db.field_for('title', book_id) or 'Unknown'
         row = self.table.rowCount()
         self.table.insertRow(row)
         self.table.setItem(row, 0, QTableWidgetItem(title))
-        self.table.setItem(row, 1, QTableWidgetItem(self.labels.get(status, status)))
-        self.table.setItem(row, 2, QTableWidgetItem(detail))
+        self.table.setItem(row, 1, QTableWidgetItem(fmt or ''))
+        self.table.setItem(row, 2, QTableWidgetItem(self.labels.get(status, status)))
+        self.table.setItem(row, 3, QTableWidgetItem(detail))
         self.table.scrollToBottom()
 
     def on_done(self, ok, message):
