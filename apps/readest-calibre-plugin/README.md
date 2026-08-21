@@ -7,10 +7,31 @@ so you can edit metadata in calibre and re-send it any time.
 
 Implements [readest/readest#4863](https://github.com/readest/readest/issues/4863).
 
+## Rationale
+
+calibre and Readest can both contain more than one file version of the same
+book. A calibre book may have EPUB and PDF formats at the same time, and the
+same title may already exist in Readest because it was uploaded directly.
+Choosing one hard-coded calibre format by priority is not enough in that
+environment: it can make PDF impossible to push when EPUB is present, and it
+can overwrite a reader's active PDF progress by rebinding the book to EPUB.
+
+The plugin therefore treats a calibre book as one Readest peer with one bound
+content format. The first push chooses a format by priority unless you choose
+one explicitly. After a Readest row is bound, default push and status checks
+use that bound format. Explicit format selection is reserved for intentional
+format switches, and the row for the selected live content is used as the
+source of Readest-owned state such as progress, reading status and grouping.
+
 ## Features
 
 - **Selective, manual push**: select books in calibre, click *Readest* in the
   toolbar. Nothing syncs in the background.
+- **Format choice without duplicates**: the first default push uses
+  `EPUB > PDF > AZW3 > MOBI > AZW > FB2 > FBZ > CBZ > TXT > MD`. Once a book is
+  bound to a Readest row, default push and status checks use the bound format.
+  To switch formats, use *Push selected books as...* and choose one of the
+  common supported formats for the current selection.
 - **Metadata included and embedded**: title, authors, series, tags,
   description, publisher, language, identifiers — and optionally calibre
   custom columns. Metadata is written both to the Readest library entry
@@ -20,11 +41,13 @@ Implements [readest/readest#4863](https://github.com/readest/readest/issues/4863
   embedding happens on a temporary copy.
 - **Update on re-push**: books already in your Readest library are recognized
   by their calibre uuid and only changed entries are rewritten; unchanged
-  books are skipped, and a changed file replaces the old entry instead of
-  duplicating it. Reading progress, grouping and reading status in Readest
-  are preserved.
-- **Per-book status report**: uploaded / updated / up to date / failed, with a
-  storage-quota check (the push stops cleanly when your quota is exhausted).
+  books are skipped. A changed file or an intentional format switch replaces
+  the old entry instead of duplicating it. Reading progress, grouping and
+  reading status in Readest are preserved from the row that represents the
+  selected live content format.
+- **Per-book status report**: uploaded / updated / up to date / failed, with
+  the checked format shown for each book and a storage-quota check (the push
+  stops cleanly when your quota is exhausted).
 - **Login like the apps**: email + password, or browser sign-in with Google,
   Apple, GitHub or Discord (OAuth via a temporary localhost callback, the same
   flow the desktop app uses).
@@ -43,9 +66,9 @@ calibre-customize -a dist/Readest-*.calibre-plugin.zip   # or: make install
 Or in calibre: *Preferences → Plugins → Load plugin from file*, then restart
 calibre and add the *Readest* button to the main toolbar if it is not visible.
 
-Release zips are versioned from `apps/readest-app/package.json` by the release
-workflow, which stamps `PLUGIN_VERSION` in `__init__.py` before zipping; the
-version committed in git is a development placeholder.
+Release and local zips are versioned from `apps/readest-app/package.json`.
+`make zip` runs `make version` first, which stamps `PLUGIN_VERSION` in
+`__init__.py` before zipping so calibre shows the same version.
 
 ## Usage
 
@@ -53,8 +76,22 @@ version committed in git is a development placeholder.
 2. Select the books to push (any number).
 3. Click the *Readest* button (or menu → *Push selected books to Readest*).
 
-For each book the best Readest-supported format is pushed, preferring
-`EPUB > PDF > AZW3 > MOBI > AZW > FB2 > FBZ > CBZ > TXT > MD`.
+For an unbound book, the default push chooses the best Readest-supported
+format, preferring:
+
+`EPUB > PDF > AZW3 > MOBI > AZW > FB2 > FBZ > CBZ > TXT > MD`
+
+After a book is bound, default push and *Check Readest status* use the bound
+format even if a higher-priority format is also present in calibre. This lets
+you select a mixed batch of bound books and push them without accidentally
+rebinding PDFs to EPUBs.
+
+To choose or switch a format, open the toolbar menu and use *Push selected
+books as...*. For a multi-book selection, the submenu lists only formats
+available for every selected book. If there are no common supported formats,
+the submenu shows a disabled explanatory item. If the requested or bound
+format is missing locally, that book fails with an explicit message instead
+of silently falling back to another format.
 
 ## How updates and duplicates work
 
@@ -69,6 +106,18 @@ Readest library is self-describing. Pushed books are then tracked by two keys:
   detects whether the file itself changed since the last push — no local
   state, so it works from any machine.
 
+Binding invariants:
+
+- One calibre book maps to one live Readest book.
+- A direct Readest upload whose content hash matches the selected calibre file
+  is reused on first push; the calibre UUID metadata is written onto that row.
+- Once a live row is bound, default push and status checks use that bound
+  format. Priority selection applies only before binding.
+- Explicit format selection is the intentional switch path.
+- When switching formats, a live row matching the selected content hash is the
+  preservation source. Its Readest-owned engagement state is carried forward,
+  and other live peer rows for the same calibre UUID are tombstoned.
+
 Re-push behavior:
 
 - **Nothing changed** → skipped.
@@ -76,13 +125,16 @@ Re-push behavior:
   file is not re-uploaded (its embedded OPF keeps the metadata from its
   upload time).
 - **File changed** (e.g. re-converted) → the new file is uploaded with fresh
-  embedded metadata and *replaces* the old entry: reading status, grouping,
-  progress and the library date carry over, the old entry is removed and its
-  cloud files are deleted. Notes and reading positions re-attach when
-  title/authors are unchanged (Readest matches book versions by metadata
-  identity).
-- Books pushed by older plugin versions (or dragged into Readest manually)
-  are recognized too: their entry hash doubles as the raw-file fingerprint.
+  embedded metadata and replaces the old entry. Reading status, grouping,
+  progress and the library date carry over; the old entry is tombstoned and
+  its cloud files are deleted.
+- **Format switched explicitly** → the selected format becomes the bound
+  format. If a live Readest row already exists for that file hash, its
+  progress, reading status and grouping are preserved while the calibre UUID
+  metadata is wired onto it; the previous live peer is tombstoned.
+- Books pushed by older plugin versions or dragged into Readest manually are
+  recognized too: their entry hash can be used as the raw-file fingerprint
+  for first binding.
 
 ## Development
 
