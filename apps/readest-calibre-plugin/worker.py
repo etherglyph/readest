@@ -230,16 +230,22 @@ class _CloudWorker(QThread):
                 self._blob_cache[book_hash] = True
         return self._blob_cache[book_hash]
 
+    def _format_constraint(self, mi):
+        """(format, source) to force for this book, or (None, None)."""
+        return (self.requested_format, 'requested') if self.requested_format else (None, None)
+
     def _plan_for(self, book_id):
         """(_BookPlan, '') for one book, or (None, reason) when it cannot be pushed."""
         mi = self.db.get_metadata(book_id)
-        fmt = resolve_format(self.db.formats(book_id), self.requested_format)
+        requested_format, format_source = self._format_constraint(mi)
+        fmt = resolve_format(self.db.formats(book_id), requested_format)
         if fmt is None:
-            if self.requested_format:
+            if requested_format:
+                label = _('Bound') if format_source == 'bound' else _('Requested')
                 return (
                     None,
-                    _('Requested format %s is not available or supported for this book')
-                    % self.requested_format,
+                    _('%s format %s is not available or supported for this book')
+                    % (label, requested_format),
                 )
             return None, _('No Readest-supported format (EPUB, PDF, ...)')
         path = self.db.format_abspath(book_id, fmt)
@@ -442,6 +448,15 @@ class PushWorker(_CloudWorker):
 
 class StatusWorker(_CloudWorker):
     """Plans every selected book without uploading, and marks the results."""
+
+    def _format_constraint(self, mi):
+        if self.requested_format:
+            return self.requested_format, 'requested'
+        uuid = (getattr(mi, 'uuid', None) or '').lower()
+        row = self.by_uuid.get(uuid) if uuid else None
+        if row is not None and not row.get('deleted_at') and row.get('format'):
+            return row['format'].upper(), 'bound'
+        return None, None
 
     def run(self):
         error = self._load_cloud_state()
