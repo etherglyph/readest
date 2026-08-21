@@ -144,8 +144,8 @@ def cloud_file(book_hash, fmt):
     return {'file_key': 'user-1/' + readest_wire.book_file_name(book_hash, fmt)}
 
 
-def server_row(book_hash, fmt, metadata=None):
-    return {
+def server_row(book_hash, fmt, metadata=None, **overrides):
+    row = {
         'book_hash': book_hash,
         'meta_hash': 'm' * 32,
         'format': fmt,
@@ -158,6 +158,8 @@ def server_row(book_hash, fmt, metadata=None):
         'deleted_at': None,
         'uploaded_at': '2024-01-01T12:00:00.000Z',
     }
+    row.update(overrides)
+    return row
 
 
 def calibre_metadata(source_hash):
@@ -314,6 +316,29 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
         worker.run()
         return rows, done
 
+    def direct_pdf_row(self):
+        return server_row(
+            self.pdf_hash,
+            'PDF',
+            progress=[42, 100],
+            reading_status='reading',
+            reading_status_updated_at='2024-03-01T00:00:00.000Z',
+            group_id='pdf-group',
+            group_name='PDF Group',
+        )
+
+    def assert_pdf_engagement_preserved(self, record):
+        self.assertEqual(record['bookHash'], self.pdf_hash)
+        self.assertEqual(record['format'], 'PDF')
+        self.assertEqual(record['progress'], [42, 100])
+        self.assertEqual(record['readingStatus'], 'reading')
+        self.assertEqual(record['groupId'], 'pdf-group')
+        self.assertEqual(record['groupName'], 'PDF Group')
+        self.assertEqual(
+            record['metadata']['identifier'],
+            'urn:uuid:cafebabe-0000-0000-0000-000000000001',
+        )
+
     def test_requested_format_replaces_existing_uuid_peer_without_duplicate(self):
         old_hash = 'e' * 32
         existing = server_row(old_hash, 'EPUB', calibre_metadata(self.epub_hash))
@@ -338,6 +363,53 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
             live[0]['metadata']['identifier'],
             'urn:uuid:cafebabe-0000-0000-0000-000000000001',
         )
+        self.assertEqual(tombstones[0]['bookHash'], old_hash)
+        self.assertIn(old_hash, ''.join(client.deleted_files))
+
+    def test_requested_format_preserves_live_hash_row_over_tombstoned_uuid_peer(self):
+        old_hash = 'e' * 32
+        direct_pdf = self.direct_pdf_row()
+        deleted_epub_peer = server_row(
+            old_hash,
+            'EPUB',
+            calibre_metadata(self.epub_hash),
+            deleted_at='2024-05-01T00:00:00.000Z',
+        )
+        client = FakeClient(
+            [direct_pdf, deleted_epub_peer],
+            [cloud_file(self.pdf_hash, 'PDF'), cloud_file(old_hash, 'EPUB')],
+        )
+
+        rows, done = self.run_push(client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'updated', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(client.upload_requests, [])
+        self.assertEqual(len(client.pushed_batches), 1)
+        self.assertEqual(len(client.pushed_batches[0]), 1)
+        self.assert_pdf_engagement_preserved(client.pushed_batches[0][0])
+        self.assertIsNone(client.pushed_batches[0][0]['deletedAt'])
+
+    def test_requested_format_preserves_live_hash_row_over_live_uuid_peer(self):
+        old_hash = 'e' * 32
+        direct_pdf = self.direct_pdf_row()
+        epub_peer = server_row(old_hash, 'EPUB', calibre_metadata(self.epub_hash))
+        client = FakeClient(
+            [direct_pdf, epub_peer],
+            [cloud_file(self.pdf_hash, 'PDF'), cloud_file(old_hash, 'EPUB')],
+        )
+
+        rows, done = self.run_push(client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'updated', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(client.upload_requests, [])
+        self.assertEqual(len(client.pushed_batches), 1)
+        live = [record for record in client.pushed_batches[0] if not record.get('deletedAt')]
+        tombstones = [record for record in client.pushed_batches[0] if record.get('deletedAt')]
+        self.assertEqual(len(live), 1)
+        self.assertEqual(len(tombstones), 1)
+        self.assert_pdf_engagement_preserved(live[0])
         self.assertEqual(tombstones[0]['bookHash'], old_hash)
         self.assertIn(old_hash, ''.join(client.deleted_files))
 
