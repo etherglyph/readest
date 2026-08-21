@@ -166,6 +166,7 @@ def calibre_metadata(source_hash):
     return {
         'title': 'The Test Book',
         'author': 'Alice Author',
+        'language': 'eng',
         'identifier': 'urn:uuid:cafebabe-0000-0000-0000-000000000001',
         'calibreSourceHash': source_hash,
     }
@@ -236,13 +237,15 @@ class WorkerStatusFormatReportingTest(unittest.TestCase):
             with open(path, 'wb') as handle:
                 handle.write(body)
             self.paths[fmt] = path
+        self.epub_hash = readest_api.partial_md5(self.paths['EPUB'])
+        self.pdf_hash = readest_api.partial_md5(self.paths['PDF'])
 
-    def run_status_worker(self, formats, requested_format=None):
+    def run_status_worker(self, formats, requested_format=None, client=None):
         worker = StatusWorker(
             None,
             FakeDB(formats, self.paths),
             [1],
-            FakeClient(),
+            client or FakeClient(),
             False,
             requested_format,
         )
@@ -264,6 +267,44 @@ class WorkerStatusFormatReportingTest(unittest.TestCase):
 
         self.assertEqual(rows, [(1, 'new', 'PDF', '')])
         self.assertEqual(done[0][0], True)
+
+    def test_status_worker_defaults_to_live_bound_format(self):
+        bound = server_row(self.pdf_hash, 'PDF', calibre_metadata(self.pdf_hash))
+        old_epub_peer = server_row(
+            'e' * 32,
+            'EPUB',
+            calibre_metadata(self.epub_hash),
+            deleted_at='2024-05-01T00:00:00.000Z',
+        )
+        client = FakeClient([old_epub_peer, bound], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_status_worker(['EPUB', 'PDF'], client=client)
+
+        self.assertEqual(rows, [(1, 'skip', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+
+    def test_status_worker_requested_format_overrides_bound_format(self):
+        bound = server_row(self.pdf_hash, 'PDF', calibre_metadata(self.pdf_hash))
+        client = FakeClient([bound], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_status_worker(
+            ['EPUB', 'PDF'],
+            requested_format='EPUB',
+            client=client,
+        )
+
+        self.assertEqual(rows, [(1, 'replace', 'EPUB', '')])
+        self.assertEqual(done[0][0], True)
+
+    def test_status_worker_reports_missing_bound_format(self):
+        bound = server_row(self.pdf_hash, 'PDF', calibre_metadata(self.pdf_hash))
+        client = FakeClient([bound], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_status_worker(['EPUB'], client=client)
+
+        self.assertEqual(rows[0][:3], (1, 'failed', ''))
+        self.assertIn('Bound format PDF', rows[0][3])
+        self.assertEqual(done[0][0], False)
 
     def test_status_worker_has_no_format_when_none_is_chosen(self):
         rows, done = self.run_status_worker(['EPUB'], 'PDF')
