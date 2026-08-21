@@ -195,6 +195,19 @@ class ReadestMenuTest(unittest.TestCase):
         self.assertFalse(plugin.push_format_action.visible)
         self.assertEqual(action_texts(plugin.push_format_menu), [])
 
+    def test_explains_multi_selection_without_common_formats(self):
+        plugin = make_plugin([1, 2], {1: ['EPUB'], 2: ['PDF']})
+
+        plugin.update_menu()
+
+        self.assertTrue(plugin.push_format_action.visible)
+        self.assertTrue(plugin.push_format_action.enabled)
+        self.assertEqual(
+            action_texts(plugin.push_format_menu),
+            [readest_ui.NO_COMMON_FORMATS_MESSAGE],
+        )
+        self.assertFalse(plugin.push_format_menu.actions[0].enabled)
+
     def test_format_submenu_uses_common_formats_for_multi_selection(self):
         plugin = make_plugin(
             [1, 2],

@@ -16,6 +16,8 @@ try:
 except NameError:
     pass
 
+NO_COMMON_FORMATS_MESSAGE = _('There are no common formats for selected books')
+
 
 def make_client():
     return ReadestClient(
@@ -65,7 +67,7 @@ class ReadestInterfacePlugin(InterfaceAction):
 
         self.menu = QMenu(self.gui)
         self.menu.addAction(self.push_action)
-        self.push_format_menu = QMenu('Push selected books as…', self.gui)
+        self.push_format_menu = QMenu(_('Push selected books as…'), self.gui)
         self.push_format_action = self.menu.addMenu(self.push_format_menu)
         self.menu.addAction(self.check_action)
         self.menu.addSeparator()
@@ -99,7 +101,7 @@ class ReadestInterfacePlugin(InterfaceAction):
     def push_selected_format(self, requested_format):
         self.run_on_selection(
             PushDialog,
-            'Select the books to push to Readest.',
+            _('Select the books to push to Readest.'),
             requested_format=requested_format,
         )
 
@@ -114,20 +116,26 @@ class ReadestInterfacePlugin(InterfaceAction):
         return common_supported_formats(db.formats(book_id) for book_id in book_ids)
 
     def update_push_format_menu(self):
+        book_count = len(self.selected_book_ids())
         formats = self.common_selected_formats()
         self.push_format_menu.clear()
-        show_menu = len(formats) > 1
-        self.push_format_action.setVisible(show_menu)
-        self.push_format_action.setEnabled(show_menu)
-        if not show_menu:
-            return
-        for fmt in formats:
-            action = self.push_format_menu.addAction(fmt)
-            action.triggered.connect(
-                lambda checked=False, requested_format=fmt: self.push_selected_format(
-                    requested_format
+        if len(formats) > 1:
+            self.push_format_action.setVisible(True)
+            self.push_format_action.setEnabled(True)
+            for fmt in formats:
+                action = self.push_format_menu.addAction(fmt)
+                action.triggered.connect(
+                    lambda checked=False, requested_format=fmt: self.push_selected_format(
+                        requested_format
+                    )
                 )
-            )
+            return
+        show_message = book_count > 1 and not formats
+        self.push_format_action.setVisible(show_message)
+        self.push_format_action.setEnabled(show_message)
+        if show_message:
+            action = self.push_format_menu.addAction(NO_COMMON_FORMATS_MESSAGE)
+            action.setEnabled(False)
 
     def run_on_selection(self, dialog_class, no_selection_message, requested_format=None):
         book_ids = self.selected_book_ids()
