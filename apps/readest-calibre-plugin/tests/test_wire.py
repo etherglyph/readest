@@ -14,6 +14,7 @@ from wire import (  # noqa: E402
     build_wire_book,
     calibre_columns,
     cloud_book_hashes,
+    cloud_cover_hashes,
     common_supported_formats,
     cover_file_name,
     index_rows_by_uuid,
@@ -289,6 +290,12 @@ class PlanPushTest(unittest.TestCase):
         self.assertEqual(plan['action'], 'update')
         self.assertTrue(plan['upload_cover'])
 
+    def test_missing_cloud_cover_is_update_with_cover(self):
+        wire = wire_for()
+        plan = plan_push(synced_row(wire), wire, 'c' * 32, SRC, cover_present=False)
+        self.assertEqual(plan['action'], 'update')
+        self.assertTrue(plan['upload_cover'])
+
     def test_tombstoned_row_is_resurrected(self):
         wire = wire_for()
         row = synced_row(wire)
@@ -451,6 +458,7 @@ class CloudBookHashesTest(unittest.TestCase):
     def test_cover_alone_does_not_mark_hash_present(self):
         files = [{'file_key': 'user-1/Readest/Books/%s/cover.png' % ('a' * 32)}]
         self.assertEqual(cloud_book_hashes(files), set())
+        self.assertEqual(cloud_cover_hashes(files), {'a' * 32})
 
     def test_app_uploaded_title_filename(self):
         # The app stores books as {hash}/{title}.{ext}, not {hash}/{hash}.{ext}.
@@ -479,6 +487,7 @@ class CloudBookHashesTest(unittest.TestCase):
             {'file_key': 'user-1/' + cover_file_name(book_hash)},
         ]
         self.assertEqual(cloud_book_hashes(files), {book_hash})
+        self.assertEqual(cloud_cover_hashes(files), {book_hash})
 
 
 class PlanPushAfterStorageWipeTest(unittest.TestCase):
@@ -682,9 +691,28 @@ class MergeForPushTest(unittest.TestCase):
         rec = merge_for_push(wire, row, NOW, uploaded_at_ms=NOW)
         self.assertEqual(rec['uploadedAt'], NOW)
 
+    def test_can_omit_server_cover_when_replacing_into_new_namespace(self):
+        wire = wire_for()
+        row = server_row()
+        rec = merge_for_push(
+            wire,
+            row,
+            NOW,
+            uploaded_at_ms=NOW,
+            preserve_server_cover=False,
+        )
+        self.assertNotIn('coverHash', rec)
+        self.assertNotIn('coverUpdatedAt', rec)
+
     def test_new_cover_overrides_server_cover(self):
         wire = wire_for()
-        rec = merge_for_push(wire, server_row(), NOW, cover_hash='f' * 32)
+        rec = merge_for_push(
+            wire,
+            server_row(),
+            NOW,
+            cover_hash='f' * 32,
+            preserve_server_cover=False,
+        )
         self.assertEqual(rec['coverHash'], 'f' * 32)
         self.assertEqual(rec['coverUpdatedAt'], NOW)
 

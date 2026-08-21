@@ -90,9 +90,10 @@ class Metadata:
 
 
 class FakeDB:
-    def __init__(self, formats, paths):
+    def __init__(self, formats, paths, cover_bytes=None):
         self._formats = formats
         self._paths = paths
+        self._cover_bytes = cover_bytes
 
     def get_metadata(self, book_id):
         return Metadata()
@@ -104,7 +105,7 @@ class FakeDB:
         return self._paths.get(fmt.upper())
 
     def cover(self, book_id):
-        return None
+        return self._cover_bytes
 
 
 class FakeMultiDB:
@@ -514,6 +515,51 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
             'urn:uuid:cafebabe-0000-0000-0000-000000000001',
         )
         self.assertIsNone(record['deletedAt'])
+
+    def test_push_repairs_missing_cloud_cover_object(self):
+        cover_bytes = b'calibre cover bytes'
+        cover_hash = readest_api.partial_md5_bytes(cover_bytes)
+        existing = server_row(
+            self.pdf_hash,
+            'PDF',
+            calibre_metadata(self.pdf_hash),
+            cover_hash=cover_hash,
+            cover_updated_at='2024-01-01T00:00:00.000Z',
+        )
+        client = FakeClient([existing], [cloud_file(self.pdf_hash, 'PDF')])
+        db = FakeDB(['PDF'], self.paths, cover_bytes)
+
+        rows, done = self.run_push_with_db(db, [1], client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'updated', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(len(client.upload_requests), 1)
+        self.assertEqual(
+            client.upload_requests[0]['fileName'],
+            readest_wire.cover_file_name(self.pdf_hash),
+        )
+        self.assertEqual(client.uploads[0]['body'], cover_bytes)
+        self.assertEqual(client.pushed_batches[0][0]['coverHash'], cover_hash)
+
+    def test_replace_without_local_cover_does_not_carry_orphaned_cover_hash(self):
+        old_hash = 'e' * 32
+        existing = server_row(
+            old_hash,
+            'EPUB',
+            calibre_metadata(self.epub_hash),
+            cover_hash='c' * 32,
+            cover_updated_at='2024-01-01T00:00:00.000Z',
+        )
+        client = FakeClient([existing], [cloud_file(old_hash, 'EPUB')])
+
+        rows, done = self.run_push(client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'replaced', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        live = [record for record in client.pushed_batches[0] if not record.get('deletedAt')]
+        self.assertEqual(len(live), 1)
+        self.assertNotIn('coverHash', live[0])
+        self.assertNotIn('coverUpdatedAt', live[0])
 
     def test_default_push_respects_bound_formats_for_bulk_selection(self):
         book_ids = [1, 2, 3, 4, 5]

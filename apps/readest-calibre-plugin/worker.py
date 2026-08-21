@@ -26,6 +26,7 @@ from calibre_plugins.readest.wire import (
     build_wire_book,
     calibre_columns,
     cloud_book_hashes,
+    cloud_cover_hashes,
     cover_file_name,
     index_rows_by_uuid,
     merge_for_push,
@@ -173,7 +174,9 @@ class _CloudWorker(QThread):
         self.canceled = False
         self.marks = {}  # book_id -> calibre mark label
         self.cloud_hashes = None  # whole-account listing, when it is worth paging
+        self.cloud_cover_hashes = None
         self._blob_cache = {}  # book_hash -> in storage? (per-book fallback)
+        self._cover_cache = {}  # book_hash -> cover.png in storage? (per-book fallback)
 
     def cancel(self):
         self.canceled = True
@@ -188,11 +191,11 @@ class _CloudWorker(QThread):
             return _('Could not reach Readest: %s') % err
         self.by_hash = {r['book_hash']: r for r in rows}
         self.by_uuid = index_rows_by_uuid(rows)
-        self.cloud_hashes = self._bulk_listing()
+        self.cloud_hashes, self.cloud_cover_hashes = self._bulk_listing()
         return None
 
     def _bulk_listing(self):
-        """Every book hash in storage, or None to look them up one at a time.
+        """Every book and cover hash in storage, or None to look them up per book.
 
         Paging the whole listing costs a request per page whatever the
         selection size, so for a handful of books it is far cheaper to ask
@@ -202,17 +205,17 @@ class _CloudWorker(QThread):
         try:
             files, total_pages = self.client.list_files_page(1)
             if not should_bulk_list(total_pages, len(self.book_ids)):
-                return None
+                return None, None
             for page in range(2, total_pages + 1):
                 if self.canceled:
-                    return None
+                    return None, None
                 more, _ = self.client.list_files_page(page)
                 files.extend(more)
-            return cloud_book_hashes(files)
+            return cloud_book_hashes(files), cloud_cover_hashes(files)
         except Exception:
             # Fall back to per-book lookups, which degrade on their own.
             traceback.print_exc()
-            return None
+            return None, None
 
     def _blob_present(self, book_hash):
         """Whether this book's file is really in cloud storage."""
@@ -229,6 +232,23 @@ class _CloudWorker(QThread):
                 traceback.print_exc()
                 self._blob_cache[book_hash] = True
         return self._blob_cache[book_hash]
+
+    def _cover_present(self, book_hash):
+        """Whether this book's cover.png is really in cloud storage."""
+        if self.cloud_cover_hashes is not None:
+            return book_hash in self.cloud_cover_hashes
+        if book_hash not in self._cover_cache:
+            try:
+                self._cover_cache[book_hash] = book_hash in cloud_cover_hashes(
+                    self.client.list_files(book_hash)
+                )
+            except Exception:
+                # If storage probing fails, avoid forcing a cover-only update
+                # that may churn on every sync. A changed local cover hash still
+                # uploads through plan_push without this probe.
+                traceback.print_exc()
+                self._cover_cache[book_hash] = True
+        return self._cover_cache[book_hash]
 
     def _format_constraint(self, mi):
         """(format, source) to force for this book, or (None, None)."""
@@ -269,7 +289,14 @@ class _CloudWorker(QThread):
         server_row, duplicate_rows = pick_server_binding(
             self.by_hash.get(source_hash), self.by_uuid.get(uuid) if uuid else None
         )
-        plan = plan_push(server_row, wire, cover_hash, source_hash, self._blob_present)
+        plan = plan_push(
+            server_row,
+            wire,
+            cover_hash,
+            source_hash,
+            self._blob_present,
+            self._cover_present,
+        )
         return (
             _BookPlan(
                 mi, fmt, path, source_hash, cover_bytes, cover_hash,
@@ -343,20 +370,29 @@ class PushWorker(_CloudWorker):
         # this run resolves to what we just pushed.
         row = {
             'book_hash': record['hash'],
+            'format': record.get('format'),
             'title': record['title'],
             'author': record['author'],
             'tags': record.get('tags'),
             'metadata': record['metadata'],
+            'updated_at': ms_to_iso(record.get('updatedAt')),
             'uploaded_at': ms_to_iso(record.get('uploadedAt')),
             'cover_hash': record.get('coverHash'),
+            'cover_updated_at': ms_to_iso(record.get('coverUpdatedAt')),
         }
         self.by_hash[record['hash']] = row
         if uuid:
             self.by_uuid[uuid] = row
         # We just uploaded it, so don't go asking storage about it again.
         self._blob_cache[record['hash']] = True
+        self._cover_cache[record['hash']] = bool(record.get('coverHash'))
         if self.cloud_hashes is not None:
             self.cloud_hashes.add(record['hash'])
+        if self.cloud_cover_hashes is not None:
+            if record.get('coverHash'):
+                self.cloud_cover_hashes.add(record['hash'])
+            else:
+                self.cloud_cover_hashes.discard(record['hash'])
 
     def _remember_tombstones(self, records):
         for record in records:
@@ -366,8 +402,11 @@ class PushWorker(_CloudWorker):
             if book_hash in self.by_hash:
                 self.by_hash[book_hash]['deleted_at'] = ms_to_iso(record.get('deletedAt'))
             self._blob_cache[book_hash] = False
+            self._cover_cache[book_hash] = False
             if self.cloud_hashes is not None:
                 self.cloud_hashes.discard(book_hash)
+            if self.cloud_cover_hashes is not None:
+                self.cloud_cover_hashes.discard(book_hash)
 
     def _push_one(self, book_id):
         ctx, reason = self._plan_for(book_id)
@@ -409,6 +448,9 @@ class PushWorker(_CloudWorker):
                     pass
             if plan['upload_cover'] and cover_bytes:
                 self._upload_cover(blob_hash, cover_bytes)
+            preserve_server_cover = (
+                server_row is not None and server_row['book_hash'] == blob_hash
+            )
             records = [
                 merge_for_push(
                     wire,
@@ -416,6 +458,7 @@ class PushWorker(_CloudWorker):
                     now_ms,
                     uploaded_at_ms=now_ms,
                     cover_hash=cover_hash if plan['upload_cover'] and cover_bytes else None,
+                    preserve_server_cover=preserve_server_cover,
                 )
             ]
             tombstones = []

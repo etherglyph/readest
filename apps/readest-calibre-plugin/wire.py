@@ -106,17 +106,24 @@ def cloud_book_hashes(files):
     Read from the file key (`{user_id}/Readest/Books/{hash}/{name}`) rather
     than the row's `book_hash`, which is only set when the uploader passed it.
     """
+    return {book_hash for book_hash, name in _cloud_file_entries(files) if name != COVER_FILE_NAME}
+
+
+def cloud_cover_hashes(files):
+    """Book hashes that have a cloud cover object."""
+    return {book_hash for book_hash, name in _cloud_file_entries(files) if name == COVER_FILE_NAME}
+
+
+def _cloud_file_entries(files):
     marker = CLOUD_BOOKS_SUBDIR + '/'
-    hashes = set()
     for record in files or []:
         key = record.get('file_key') or ''
         index = key.find(marker)
         if index < 0:
             continue
         book_hash, _, name = key[index + len(marker) :].partition('/')
-        if book_hash and name and name != COVER_FILE_NAME:
-            hashes.add(book_hash)
-    return hashes
+        if book_hash and name:
+            yield book_hash, name
 
 
 def _clean(value):
@@ -362,11 +369,18 @@ def should_bulk_list(total_pages, selected_books):
     return total_pages <= max(1, selected_books)
 
 
-def _resolve_blob_present(blob_present, book_hash):
-    return blob_present(book_hash) if callable(blob_present) else bool(blob_present)
+def _resolve_storage_present(storage_present, book_hash):
+    return storage_present(book_hash) if callable(storage_present) else bool(storage_present)
 
 
-def plan_push(server_row, wire, local_cover_hash, source_hash, blob_present=True):
+def plan_push(
+    server_row,
+    wire,
+    local_cover_hash,
+    source_hash,
+    blob_present=True,
+    cover_present=True,
+):
     """Decide what to do for one book.
 
     Returns {'action': 'new' | 'replace' | 'update' | 'skip',
@@ -378,14 +392,15 @@ def plan_push(server_row, wire, local_cover_hash, source_hash, blob_present=True
     - skip:    file + metadata + cover all unchanged
 
     `blob_present` says whether the row's book file is actually in cloud
-    storage. `uploaded_at` alone doesn't prove it: deleting files under
-    "Manage Storage" drops the object and its `files` row but never touches
-    `books.uploaded_at`, and a row-only push against a missing blob leaves a
-    book that shows up in the library but 404s on download.
+    storage. `cover_present` says the same for cover.png. `uploaded_at` alone
+    doesn't prove the book file exists: deleting files under "Manage Storage"
+    drops the object and its `files` row but never touches `books.uploaded_at`,
+    and a row-only push against a missing blob leaves a book that shows up in
+    the library but 404s on download.
 
-    It may be a bool, or a callable(book_hash) -> bool for callers that look
-    storage up one book at a time. It is checked last, so a lookup only costs
-    a request when it can still change the answer.
+    The storage probes may be bools, or callables book_hash -> bool for callers
+    that look storage up one book at a time. They are checked last, so a lookup
+    only costs a request when it can still change the answer.
     """
     if server_row is None:
         return {'action': 'new', 'upload_cover': bool(local_cover_hash)}
@@ -393,11 +408,18 @@ def plan_push(server_row, wire, local_cover_hash, source_hash, blob_present=True
         not server_row.get('uploaded_at')
         or row_source_hash(server_row) != source_hash
         or (server_row.get('format') or '').upper() != (wire.get('format') or '').upper()
-        or not _resolve_blob_present(blob_present, server_row['book_hash'])
+        or not _resolve_storage_present(blob_present, server_row['book_hash'])
     ):
         # A replaced book gets a new hash namespace, so it needs its own cover.
         return {'action': 'replace', 'upload_cover': bool(local_cover_hash)}
-    cover_changed = bool(local_cover_hash) and local_cover_hash != server_row.get('cover_hash')
+    cover_missing = (
+        bool(local_cover_hash)
+        and local_cover_hash == server_row.get('cover_hash')
+        and not _resolve_storage_present(cover_present, server_row['book_hash'])
+    )
+    cover_changed = bool(local_cover_hash) and (
+        local_cover_hash != server_row.get('cover_hash') or cover_missing
+    )
     changed = (
         not _row_matches_wire(server_row, wire)
         or bool(server_row.get('deleted_at'))
@@ -435,7 +457,14 @@ def tombstone_records(rows, now_ms, keep_hashes=()):
     return records
 
 
-def merge_for_push(wire, server_row, now_ms, uploaded_at_ms=None, cover_hash=None):
+def merge_for_push(
+    wire,
+    server_row,
+    now_ms,
+    uploaded_at_ms=None,
+    cover_hash=None,
+    preserve_server_cover=True,
+):
     """Final record for POST /sync.
 
     The server explicit-nulls any field absent from the wire record
@@ -463,7 +492,7 @@ def merge_for_push(wire, server_row, now_ms, uploaded_at_ms=None, cover_hash=Non
     if cover_hash:
         record['coverHash'] = cover_hash
         record['coverUpdatedAt'] = now_ms
-    elif row.get('cover_hash'):
+    elif preserve_server_cover and row.get('cover_hash'):
         record['coverHash'] = row['cover_hash']
         record['coverUpdatedAt'] = iso_to_ms(row.get('cover_updated_at'))
     # The server resolves title/author/tags/metadata by metadata_updated_at
