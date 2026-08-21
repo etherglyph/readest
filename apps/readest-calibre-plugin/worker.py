@@ -30,10 +30,11 @@ from calibre_plugins.readest.wire import (
     merge_for_push,
     ms_to_iso,
     pick_format,
-    pick_server_row,
+    pick_server_binding,
     plan_push,
     should_bulk_list,
     tombstone_record,
+    tombstone_records,
 )
 
 STATUS_LABELS = {
@@ -61,7 +62,7 @@ PUSHED_MARK = PLAN_MARKS['skip']
 
 _BookPlan = namedtuple(
     '_BookPlan',
-    'mi fmt path source_hash cover_bytes cover_hash now_ms wire uuid server_row plan',
+    'mi fmt path source_hash cover_bytes cover_hash now_ms wire uuid server_row duplicate_rows plan',
 )
 
 
@@ -227,14 +228,14 @@ class _CloudWorker(QThread):
         book = _book_dict(mi, self.include_custom_columns, source_hash)
         wire = build_wire_book(book, source_hash, fmt, now_ms)
         uuid = (book.get('uuid') or '').lower()
-        server_row = pick_server_row(
+        server_row, duplicate_rows = pick_server_binding(
             self.by_hash.get(source_hash), self.by_uuid.get(uuid) if uuid else None
         )
         plan = plan_push(server_row, wire, cover_hash, source_hash, self._blob_present)
         return (
             _BookPlan(
                 mi, fmt, path, source_hash, cover_bytes, cover_hash,
-                now_ms, wire, uuid, server_row, plan,
+                now_ms, wire, uuid, server_row, duplicate_rows, plan,
             ),
             '',
         )
@@ -321,6 +322,17 @@ class PushWorker(_CloudWorker):
         if self.cloud_hashes is not None:
             self.cloud_hashes.add(record['hash'])
 
+    def _remember_tombstones(self, records):
+        for record in records:
+            book_hash = record.get('bookHash') or record.get('hash')
+            if not book_hash:
+                continue
+            if book_hash in self.by_hash:
+                self.by_hash[book_hash]['deleted_at'] = ms_to_iso(record.get('deletedAt'))
+            self._blob_cache[book_hash] = False
+            if self.cloud_hashes is not None:
+                self.cloud_hashes.discard(book_hash)
+
     def _push_one(self, book_id):
         ctx, reason = self._plan_for(book_id)
         if ctx is None:
@@ -329,9 +341,21 @@ class PushWorker(_CloudWorker):
         mi, fmt, path = ctx.mi, ctx.fmt, ctx.path
         cover_bytes, cover_hash = ctx.cover_bytes, ctx.cover_hash
         now_ms, wire, uuid, server_row = ctx.now_ms, ctx.wire, ctx.uuid, ctx.server_row
+        duplicate_rows = ctx.duplicate_rows
         plan = ctx.plan
 
         if plan['action'] == 'skip':
+            tombstones = tombstone_records(
+                duplicate_rows,
+                now_ms,
+                keep_hashes={server_row['book_hash']} if server_row is not None else set(),
+            )
+            if tombstones:
+                self.client.push_books(tombstones)
+                for record in tombstones:
+                    self._delete_cloud_files(record['bookHash'])
+                self._remember_tombstones(tombstones)
+                return 'updated', ''
             return 'skipped', ''
 
         if plan['action'] in ('new', 'replace'):
@@ -358,14 +382,18 @@ class PushWorker(_CloudWorker):
                     cover_hash=cover_hash if plan['upload_cover'] and cover_bytes else None,
                 )
             ]
-            replaced_hash = None
+            tombstones = []
             if server_row is not None and server_row['book_hash'] != blob_hash:
-                replaced_hash = server_row['book_hash']
-                records.append(tombstone_record(server_row, now_ms))
+                tombstones.append(tombstone_record(server_row, now_ms))
+            tombstones.extend(
+                tombstone_records(duplicate_rows, now_ms, keep_hashes={blob_hash})
+            )
+            records.extend(tombstones)
             self.client.push_books(records)
-            if replaced_hash:
-                self._delete_cloud_files(replaced_hash)
+            for record in tombstones:
+                self._delete_cloud_files(record['bookHash'])
             self._remember(records[0], uuid)
+            self._remember_tombstones(tombstones)
             return ('replaced' if plan['action'] == 'replace' else 'uploaded'), ''
 
         # action == 'update': the cloud file is current, only the row (and
@@ -377,8 +405,14 @@ class PushWorker(_CloudWorker):
         record = merge_for_push(
             wire, server_row, now_ms, cover_hash=cover_hash if pushed_cover else None
         )
-        self.client.push_books([record])
+        tombstones = tombstone_records(
+            duplicate_rows, now_ms, keep_hashes={server_row['book_hash']}
+        )
+        self.client.push_books([record] + tombstones)
         self._remember(record, uuid)
+        self._remember_tombstones(tombstones)
+        for tombstone in tombstones:
+            self._delete_cloud_files(tombstone['bookHash'])
         return 'updated', ''
 
 
