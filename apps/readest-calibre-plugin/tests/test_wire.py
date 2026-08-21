@@ -258,6 +258,12 @@ class PlanPushTest(unittest.TestCase):
         plan = plan_push(row, wire, 'c' * 32, 'n' * 32)
         self.assertEqual(plan['action'], 'replace')
 
+    def test_changed_format_is_replaced(self):
+        wire = wire_for(fmt='PDF')
+        row = synced_row(wire_for(fmt='EPUB'))
+        plan = plan_push(row, wire, 'c' * 32, SRC)
+        self.assertEqual(plan['action'], 'replace')
+
     def test_v1_row_with_matching_raw_hash_is_not_replaced(self):
         # v1 rows have no calibreSourceHash but their book_hash IS the raw
         # file hash (v1 uploaded the file unmodified).
@@ -333,6 +339,13 @@ class BlobLookupTest(unittest.TestCase):
         wire = wire_for(dict(BOOK, source_hash='n' * 32))
         row = synced_row(wire_for())
         plan = plan_push(row, wire, 'c' * 32, 'n' * 32, self.probe(True))
+        self.assertEqual(plan['action'], 'replace')
+        self.assertEqual(self.asked, [])
+
+    def test_not_consulted_when_the_format_changed(self):
+        wire = wire_for(fmt='PDF')
+        row = synced_row(wire_for(fmt='EPUB'))
+        plan = plan_push(row, wire, 'c' * 32, SRC, self.probe(True))
         self.assertEqual(plan['action'], 'replace')
         self.assertEqual(self.asked, [])
 
