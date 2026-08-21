@@ -591,12 +591,12 @@ class ServerRowLookupTest(unittest.TestCase):
         self.assertIs(row, hash_row)
         self.assertEqual(duplicates, [])
 
-    def test_binding_prefers_uuid_peer_over_hash_match(self):
+    def test_binding_prefers_live_hash_match_over_uuid_peer(self):
         hash_row = server_row(book_hash='h' * 32)
         uuid_row = server_row(book_hash='u' * 32)
         row, duplicates = pick_server_binding(hash_row, uuid_row)
-        self.assertIs(row, uuid_row)
-        self.assertEqual(duplicates, [hash_row])
+        self.assertIs(row, hash_row)
+        self.assertEqual(duplicates, [uuid_row])
 
     def test_binding_does_not_tombstone_the_same_row(self):
         row = server_row()
@@ -611,12 +611,12 @@ class ServerRowLookupTest(unittest.TestCase):
         self.assertIs(row, uuid_row)
         self.assertEqual(duplicates, [])
 
-    def test_binding_uuid_peer_wins_even_when_tombstoned(self):
+    def test_binding_live_hash_match_wins_over_tombstoned_uuid_peer(self):
         hash_row = server_row(book_hash='h' * 32)
         uuid_row = server_row(book_hash='u' * 32, deleted_at='2024-06-01T00:00:00.000Z')
         row, duplicates = pick_server_binding(hash_row, uuid_row)
-        self.assertIs(row, uuid_row)
-        self.assertEqual(duplicates, [hash_row])
+        self.assertIs(row, hash_row)
+        self.assertEqual(duplicates, [])
 
 
 class TombstoneRecordTest(unittest.TestCase):

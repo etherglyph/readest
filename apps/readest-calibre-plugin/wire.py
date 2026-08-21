@@ -333,19 +333,21 @@ def pick_server_row(hash_row, uuid_row):
 def pick_server_binding(hash_row, uuid_row):
     """Canonical row plus live duplicates that must be tombstoned.
 
-    Once a row carries the Calibre uuid it is the stable peer for that Calibre
-    book, even when the selected file hash also matches a separate direct
-    Readest upload. Hash matching is only the first-binding fallback.
+    A live hash match is the selected content row, so it is also the best
+    source for Readest-owned engagement state. The Calibre UUID is then wired
+    onto that row, and any other live UUID peer is tombstoned.
     """
-    if uuid_row is not None:
+    if hash_row is not None and not hash_row.get('deleted_at'):
         duplicates = []
         if (
-            hash_row is not None
-            and hash_row.get('book_hash') != uuid_row.get('book_hash')
-            and not hash_row.get('deleted_at')
+            uuid_row is not None
+            and uuid_row.get('book_hash') != hash_row.get('book_hash')
+            and not uuid_row.get('deleted_at')
         ):
-            duplicates.append(hash_row)
-        return uuid_row, duplicates
+            duplicates.append(uuid_row)
+        return hash_row, duplicates
+    if uuid_row is not None:
+        return uuid_row, []
     return hash_row, []
 
 
