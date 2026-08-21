@@ -29,6 +29,7 @@ from wire import (  # noqa: E402
     should_bulk_list,
     supported_formats,
     tombstone_record,
+    tombstone_records,
 )
 
 NOW = 1_800_000_000_000
@@ -629,6 +630,18 @@ class TombstoneRecordTest(unittest.TestCase):
         self.assertEqual(rec['createdAt'], iso_to_ms('2024-01-01T00:00:00.000Z'))
         self.assertEqual(rec['updatedAt'], NOW)
         self.assertEqual(rec['deletedAt'], NOW)
+
+    def test_many_skips_active_hash_and_dedupes(self):
+        rows = [
+            server_row(book_hash='a' * 32),
+            server_row(book_hash='b' * 32),
+            server_row(book_hash='a' * 32),
+        ]
+        recs = tombstone_records(rows, NOW, keep_hashes={'b' * 32})
+        self.assertEqual([rec['bookHash'] for rec in recs], ['a' * 32])
+
+    def test_many_tolerates_empty_rows(self):
+        self.assertEqual(tombstone_records(None, NOW), [])
 
 
 class MergeForPushTest(unittest.TestCase):

@@ -419,6 +419,20 @@ def tombstone_record(row, now_ms):
     }
 
 
+def tombstone_records(rows, now_ms, keep_hashes=()):
+    """Soft-delete rows, excluding active hashes and duplicate inputs."""
+    keep = set(keep_hashes or ())
+    seen = set()
+    records = []
+    for row in rows or []:
+        book_hash = row.get('book_hash')
+        if not book_hash or book_hash in keep or book_hash in seen:
+            continue
+        seen.add(book_hash)
+        records.append(tombstone_record(row, now_ms))
+    return records
+
+
 def merge_for_push(wire, server_row, now_ms, uploaded_at_ms=None, cover_hash=None):
     """Final record for POST /sync.
 
