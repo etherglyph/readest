@@ -17,21 +17,26 @@ environment: it can make PDF impossible to push when EPUB is present, and it
 can overwrite a reader's active PDF progress by rebinding the book to EPUB.
 
 The plugin therefore treats a calibre book as one Readest peer with one bound
-content format. The first push chooses a format by priority unless you choose
-one explicitly. After a Readest row is bound, default push and status checks
-use that bound format. Explicit format selection is reserved for intentional
-format switches, and the row for the selected live content is used as the
-source of Readest-owned state such as progress, reading status and grouping.
+content format. Before a book is bound, default push and status checks look
+for a live Readest row matching any supported calibre format's content hash,
+in priority order. If none exists, the first push chooses a format by priority
+unless you choose one explicitly. After a Readest row is bound, default push
+and status checks use that bound format. Explicit format selection is reserved
+for intentional format switches, and the row for the selected live content is
+used as the source of Readest-owned state such as progress, reading status and
+grouping.
 
 ## Features
 
 - **Selective, manual push**: select books in calibre, click *Readest* in the
   toolbar. Nothing syncs in the background.
-- **Format choice without duplicates**: the first default push uses
-  `EPUB > PDF > AZW3 > MOBI > AZW > FB2 > FBZ > CBZ > TXT > MD`. Once a book is
-  bound to a Readest row, default push and status checks use the bound format.
-  To switch formats, use *Push selected books as...* and choose one of the
-  common supported formats for the current selection.
+- **Format choice without duplicates**: for an unbound book, default push and
+  status checks first scan supported calibre formats in
+  `EPUB > PDF > AZW3 > MOBI > AZW > FB2 > FBZ > CBZ > TXT > MD` order for an
+  existing live Readest hash match, then fall back to the first format in that
+  order. Once a book is bound to a Readest row, default push and status checks
+  use the bound format. To switch formats, use *Push selected books as...* and
+  choose one of the common supported formats for the current selection.
 - **Metadata included and embedded**: title, authors, series, tags,
   description, publisher, language, identifiers — and optionally calibre
   custom columns. Metadata is written both to the Readest library entry
@@ -76,10 +81,14 @@ Release and local zips are versioned from `apps/readest-app/package.json`.
 2. Select the books to push (any number).
 3. Click the *Readest* button (or menu → *Push selected books to Readest*).
 
-For an unbound book, the default push chooses the best Readest-supported
-format, preferring:
+For an unbound book, default push and *Check Readest status* first look for an
+existing live Readest row whose content hash matches any supported calibre
+format, checking formats in this order:
 
 `EPUB > PDF > AZW3 > MOBI > AZW > FB2 > FBZ > CBZ > TXT > MD`
+
+If no hash match is found, default push chooses the first available format in
+that same order.
 
 After a book is bound, default push and *Check Readest status* use the bound
 format even if a higher-priority format is also present in calibre. This lets
@@ -109,8 +118,9 @@ Readest library is self-describing. Pushed books are then tracked by two keys:
 Binding invariants:
 
 - One calibre book maps to one live Readest book.
-- A direct Readest upload whose content hash matches the selected calibre file
-  is reused on first push; the calibre UUID metadata is written onto that row.
+- A direct Readest upload whose content hash matches any supported calibre
+  format is reused on first push; the calibre UUID metadata is written onto
+  that row.
 - Once a live row is bound, default push and status checks use that bound
   format. Priority selection applies only before binding.
 - Explicit format selection is the intentional switch path.

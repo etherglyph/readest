@@ -228,6 +228,19 @@ class WorkerFormatPlanningTest(unittest.TestCase):
         self.assertEqual(ctx.path, self.paths['EPUB'])
         self.assertEqual(ctx.plan['action'], 'new')
 
+    def test_unbound_book_uses_live_hash_match_before_priority_fallback(self):
+        worker = self.make_worker(['EPUB', 'PDF'])
+        pdf_hash = readest_api.partial_md5(self.paths['PDF'])
+        worker.by_hash = {pdf_hash: server_row(pdf_hash, 'PDF')}
+        worker.cloud_hashes = {pdf_hash}
+
+        ctx, reason = worker._plan_for(1)
+
+        self.assertEqual(reason, '')
+        self.assertEqual(ctx.fmt, 'PDF')
+        self.assertEqual(ctx.path, self.paths['PDF'])
+        self.assertEqual(ctx.plan['action'], 'update')
+
     def test_requested_format_overrides_priority(self):
         ctx, reason = self.make_worker(['EPUB', 'PDF'], 'PDF')._plan_for(1)
         self.assertEqual(reason, '')
@@ -286,10 +299,32 @@ class WorkerStatusFormatReportingTest(unittest.TestCase):
         self.assertEqual(rows, [(1, 'new', 'EPUB', '')])
         self.assertEqual(done[0][0], True)
 
+    def test_status_worker_discovers_unbound_lower_priority_hash_match(self):
+        direct_pdf = server_row(self.pdf_hash, 'PDF')
+        client = FakeClient([direct_pdf], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_status_worker(['EPUB', 'PDF'], client=client)
+
+        self.assertEqual(rows, [(1, 'update', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+
     def test_status_worker_reports_requested_chosen_format(self):
         rows, done = self.run_status_worker(['PDF', 'EPUB'], 'PDF')
 
         self.assertEqual(rows, [(1, 'new', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+
+    def test_status_worker_requested_format_does_not_scan_other_formats(self):
+        direct_pdf = server_row(self.pdf_hash, 'PDF')
+        client = FakeClient([direct_pdf], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_status_worker(
+            ['EPUB', 'PDF'],
+            requested_format='EPUB',
+            client=client,
+        )
+
+        self.assertEqual(rows, [(1, 'new', 'EPUB', '')])
         self.assertEqual(done[0][0], True)
 
     def test_status_worker_defaults_to_live_bound_format(self):
@@ -515,6 +550,21 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
             'urn:uuid:cafebabe-0000-0000-0000-000000000001',
         )
         self.assertIsNone(record['deletedAt'])
+
+    def test_default_push_binds_unbound_lower_priority_hash_match(self):
+        direct_pdf = self.direct_pdf_row()
+        client = FakeClient([direct_pdf], [cloud_file(self.pdf_hash, 'PDF')])
+
+        rows, done = self.run_push(client)
+
+        self.assertEqual(rows, [(1, 'updated', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(client.upload_requests, [])
+        self.assertEqual(client.uploads, [])
+        self.assertEqual(len(client.pushed_batches), 1)
+        self.assertEqual(len(client.pushed_batches[0]), 1)
+        self.assert_pdf_engagement_preserved(client.pushed_batches[0][0])
+        self.assertIsNone(client.pushed_batches[0][0]['deletedAt'])
 
     def test_push_repairs_missing_cloud_cover_object(self):
         cover_bytes = b'calibre cover bytes'

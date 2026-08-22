@@ -35,6 +35,7 @@ from calibre_plugins.readest.wire import (
     plan_push,
     resolve_format,
     should_bulk_list,
+    supported_formats,
     tombstone_record,
     tombstone_records,
 )
@@ -260,11 +261,31 @@ class _CloudWorker(QThread):
             return row['format'].upper(), 'bound'
         return None, None
 
+    def _format_choice(self, book_id, fmt):
+        path = self.db.format_abspath(book_id, fmt)
+        if not path or not os.path.exists(path):
+            return None
+        return fmt, path, partial_md5(path)
+
+    def _unbound_hash_match_choice(self, book_id, available_formats):
+        for fmt in supported_formats(available_formats):
+            choice = self._format_choice(book_id, fmt)
+            if choice is None:
+                continue
+            row = self.by_hash.get(choice[2])
+            if row is not None and not row.get('deleted_at'):
+                return choice
+        return None
+
     def _plan_for(self, book_id):
         """(_BookPlan, '') for one book, or (None, reason) when it cannot be pushed."""
         mi = self.db.get_metadata(book_id)
+        available_formats = self.db.formats(book_id)
         requested_format, format_source = self._format_constraint(mi)
-        fmt = resolve_format(self.db.formats(book_id), requested_format)
+        choice = None
+        if requested_format is None:
+            choice = self._unbound_hash_match_choice(book_id, available_formats)
+        fmt = choice[0] if choice else resolve_format(available_formats, requested_format)
         if fmt is None:
             if requested_format:
                 label = _('Bound') if format_source == 'bound' else _('Requested')
@@ -274,11 +295,12 @@ class _CloudWorker(QThread):
                     % (label, requested_format),
                 )
             return None, _('No Readest-supported format (EPUB, PDF, ...)')
-        path = self.db.format_abspath(book_id, fmt)
-        if not path or not os.path.exists(path):
+        if choice is None:
+            choice = self._format_choice(book_id, fmt)
+        if choice is None:
             return None, _('Book file is missing from the calibre library')
+        fmt, path, source_hash = choice
 
-        source_hash = partial_md5(path)
         cover_bytes = self.db.cover(book_id)
         cover_hash = partial_md5_bytes(cover_bytes) if cover_bytes else None
 
