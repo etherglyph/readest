@@ -37,13 +37,12 @@ grouping.
   order. Once a book is bound to a Readest row, default push and status checks
   use the bound format. To switch formats, use *Push selected books as...* and
   choose one of the common supported formats for the current selection.
-- **Metadata included and embedded**: title, authors, series, tags,
-  description, publisher, language, identifiers — and optionally calibre
-  custom columns. Metadata is written both to the Readest library entry
-  (custom columns under `calibreColumns`) and into the uploaded file's OPF
-  (calibre's own embedding, so custom columns travel as
-  `calibre:user_metadata`). Your calibre library files are never modified —
-  embedding happens on a temporary copy.
+- **Metadata synchronized without rewriting the file**: title, authors, series,
+  tags, description, publisher, language, identifiers — and optionally calibre
+  custom columns — are written to the Readest library entry. By default the
+  original calibre format file is uploaded byte-for-byte. Metadata embedding
+  can be restored in the plugin settings; it always happens on a temporary
+  copy, so the calibre library file is never modified.
 - **Update on re-push**: books already in your Readest library are recognized
   by their calibre uuid and only changed entries are rewritten; unchanged
   books are skipped. A changed file or an intentional format switch replaces
@@ -104,16 +103,25 @@ of silently falling back to another format.
 
 ## How updates and duplicates work
 
-At upload time the plugin embeds your current calibre metadata (including
-custom columns) into a temporary copy of the book file, so the copy in your
-Readest library is self-describing. Pushed books are then tracked by two keys:
+By default the plugin uploads the original calibre format file unchanged and
+stores current calibre metadata (including custom columns) on the Readest
+library row. In this mode `calibreSourceHash` and `book_hash` are the same.
+Pushed books are tracked by two keys:
 
 - the **calibre book uuid**, carried in the entry's metadata
   (`urn:uuid:...`) — this recognizes "this calibre book is already in
   Readest" across pushes, even when the file bytes change;
 - a **fingerprint of the raw calibre file** (`calibreSourceHash`), which
   detects whether the file itself changed since the last push — no local
-  state, so it works from any machine.
+  state, so it works from any machine. It is also the Readest `book_hash`
+  while the default raw-file mode is active.
+
+The *Do not embed metadata into exported file* setting is enabled by default.
+Uncheck it to retain the earlier behavior: the plugin writes calibre metadata
+into a temporary copy before upload, so `book_hash` can differ from
+`calibreSourceHash`. Enabling raw-file mode for an older embedded row makes the
+row *Out of date*; the next push replaces its blob with the original calibre
+file while preserving Readest-owned engagement metadata.
 
 Binding invariants:
 
@@ -132,12 +140,10 @@ Re-push behavior:
 
 - **Nothing changed** → skipped.
 - **Metadata edited** → the Readest library entry is updated in place; the
-  file is not re-uploaded (its embedded OPF keeps the metadata from its
-  upload time).
-- **File changed** (e.g. re-converted) → the new file is uploaded with fresh
-  embedded metadata and replaces the old entry. Reading status, grouping,
-  progress and the library date carry over; the old entry is tombstoned and
-  its cloud files are deleted.
+  file is not re-uploaded.
+- **File changed** (e.g. re-converted) → the new file is uploaded and replaces
+  the old entry. Reading status, grouping, progress and the library date carry
+  over; the old entry is tombstoned and its cloud files are deleted.
 - **Format switched explicitly** → the selected format becomes the bound
   format. If a live Readest row already exists for that file hash, its
   progress, reading status and grouping are preserved while the calibre UUID

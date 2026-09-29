@@ -165,6 +165,7 @@ class _CloudWorker(QThread):
         client,
         include_custom_columns,
         requested_format=None,
+        do_not_embed_metadata=True,
     ):
         QThread.__init__(self, parent)
         self.db = db  # calibre new_api (thread-safe)
@@ -172,6 +173,7 @@ class _CloudWorker(QThread):
         self.client = client
         self.include_custom_columns = include_custom_columns
         self.requested_format = requested_format.upper() if requested_format else None
+        self.do_not_embed_metadata = do_not_embed_metadata
         self.canceled = False
         self.marks = {}  # book_id -> calibre mark label
         self.cloud_hashes = None  # whole-account listing, when it is worth paging
@@ -318,6 +320,7 @@ class _CloudWorker(QThread):
             source_hash,
             self._blob_present,
             self._cover_present,
+            expected_blob_hash=source_hash if self.do_not_embed_metadata else None,
         )
         return (
             _BookPlan(
@@ -456,7 +459,11 @@ class PushWorker(_CloudWorker):
             return 'skipped', fmt, ''
 
         if plan['action'] in ('new', 'replace'):
-            blob_path = _embed_metadata_copy(path, mi, fmt)
+            blob_path = path
+            remove_blob_path = False
+            if not self.do_not_embed_metadata:
+                blob_path = _embed_metadata_copy(path, mi, fmt)
+                remove_blob_path = True
             try:
                 blob_hash = partial_md5(blob_path)
                 wire['hash'] = wire['bookHash'] = blob_hash
@@ -464,10 +471,11 @@ class PushWorker(_CloudWorker):
                 with open(blob_path, 'rb') as f:
                     self._upload(book_file_name(blob_hash, fmt), f, size, blob_hash)
             finally:
-                try:
-                    os.unlink(blob_path)
-                except OSError:
-                    pass
+                if remove_blob_path:
+                    try:
+                        os.unlink(blob_path)
+                    except OSError:
+                        pass
             if plan['upload_cover'] and cover_bytes:
                 self._upload_cover(blob_hash, cover_bytes)
             preserve_server_cover = (

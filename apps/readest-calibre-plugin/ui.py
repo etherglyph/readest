@@ -151,7 +151,8 @@ class ReadestInterfacePlugin(InterfaceAction):
             book_ids,
             make_client(),
             bool(prefs['include_custom_columns']),
-            requested_format,
+            requested_format=requested_format,
+            do_not_embed_metadata=bool(prefs['do_not_embed_metadata']),
         )
         dialog.exec()
         self.apply_marks(dialog.marks)

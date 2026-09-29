@@ -201,10 +201,9 @@ def build_metadata(book):
         'subject': [_clean(t) for t in book.get('tags') or []] or None,
         'series': _clean(book.get('series')),
         'isbn': _clean(book.get('isbn')),
-        # Partial MD5 of the RAW calibre library file. The uploaded blob has
-        # metadata embedded so its hash (book_hash) shifts with every embed;
-        # this stable fingerprint is how a later push detects "the file
-        # itself changed" without any machine-local state.
+        # Partial MD5 of the raw calibre library file. By default this is also
+        # the uploaded blob's book_hash. It remains a separate field for rows
+        # created with metadata embedding enabled and for older plugin rows.
         'calibreSourceHash': book.get('source_hash'),
     }
     if book.get('series'):
@@ -313,9 +312,9 @@ def _prefer_row(row, over):
 def index_rows_by_uuid(rows):
     """Map calibre uuid -> best server row (live over tombstoned, then newest).
 
-    This is the identity that survives file-content changes: the uploaded blob
-    has metadata embedded, so book_hash shifts whenever the file or its
-    metadata does, but the calibre uuid in metadata.identifier stays put.
+    This is the identity that survives file-content changes. It also survives
+    metadata embedding when that optional behavior gives the uploaded blob a
+    hash different from the raw calibre file.
     """
     best = {}
     for row in rows:
@@ -380,14 +379,15 @@ def plan_push(
     source_hash,
     blob_present=True,
     cover_present=True,
+    expected_blob_hash=None,
 ):
     """Decide what to do for one book.
 
     Returns {'action': 'new' | 'replace' | 'update' | 'skip',
              'upload_cover': bool}.
-    - new:     no server row — embed metadata, upload file, insert row
-    - replace: the raw file/format changed (or the row has no file blob) —
-               upload a fresh embedded blob under its new hash, tombstone the old row
+    - new:     no server row — upload file and insert row
+    - replace: the raw file/format changed, the expected blob hash differs, or
+               the row has no file blob — upload a fresh blob and tombstone the old row
     - update:  file unchanged, but metadata/cover/tombstone differ — row only
     - skip:    file + metadata + cover all unchanged
 
@@ -401,12 +401,20 @@ def plan_push(
     The storage probes may be bools, or callables book_hash -> bool for callers
     that look storage up one book at a time. They are checked last, so a lookup
     only costs a request when it can still change the answer.
+
+    `expected_blob_hash` is set when the upload mode has a predictable hash.
+    Raw-file mode uses `source_hash`, which also migrates older embedded blobs
+    back to the original calibre bytes on the next push.
     """
     if server_row is None:
         return {'action': 'new', 'upload_cover': bool(local_cover_hash)}
     if (
         not server_row.get('uploaded_at')
         or row_source_hash(server_row) != source_hash
+        or (
+            expected_blob_hash is not None
+            and server_row.get('book_hash') != expected_blob_hash
+        )
         or (server_row.get('format') or '').upper() != (wire.get('format') or '').upper()
         or not _resolve_storage_present(blob_present, server_row['book_hash'])
     ):

@@ -18,6 +18,7 @@ prefs.defaults['supabase_url'] = DEFAULT_SUPABASE_URL
 prefs.defaults['tokens'] = None  # {access_token, refresh_token, expires_at, expires_in}
 prefs.defaults['user_email'] = None
 prefs.defaults['include_custom_columns'] = True
+prefs.defaults['do_not_embed_metadata'] = True
 
 
 def save_tokens(tokens):
@@ -40,6 +41,20 @@ class ConfigWidget(QWidget):
         self.custom_columns_checkbox.setChecked(bool(prefs['include_custom_columns']))
         layout.addWidget(self.custom_columns_checkbox)
 
+        self.do_not_embed_metadata_checkbox = QCheckBox(
+            _('Do not embed metadata into exported file')
+        )
+        self.do_not_embed_metadata_checkbox.setChecked(
+            bool(prefs['do_not_embed_metadata'])
+        )
+        self.do_not_embed_metadata_checkbox.setToolTip(
+            _(
+                'Upload the original calibre format file unchanged. '
+                'Metadata is still synchronized to the Readest library entry.'
+            )
+        )
+        layout.addWidget(self.do_not_embed_metadata_checkbox)
+
         layout.addWidget(QLabel(_('API server:')))
         self.api_base_edit = QLineEdit(self)
         self.api_base_edit.setText(prefs['api_base'])
@@ -52,4 +67,7 @@ class ConfigWidget(QWidget):
 
     def save_settings(self):
         prefs['include_custom_columns'] = self.custom_columns_checkbox.isChecked()
+        prefs['do_not_embed_metadata'] = (
+            self.do_not_embed_metadata_checkbox.isChecked()
+        )
         prefs['api_base'] = self.api_base_edit.text().strip() or DEFAULT_API_BASE

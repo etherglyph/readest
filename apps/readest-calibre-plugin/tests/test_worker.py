@@ -277,7 +277,13 @@ class WorkerStatusFormatReportingTest(unittest.TestCase):
         self.epub_hash = readest_api.partial_md5(self.paths['EPUB'])
         self.pdf_hash = readest_api.partial_md5(self.paths['PDF'])
 
-    def run_status_worker(self, formats, requested_format=None, client=None):
+    def run_status_worker(
+        self,
+        formats,
+        requested_format=None,
+        client=None,
+        do_not_embed_metadata=True,
+    ):
         worker = StatusWorker(
             None,
             FakeDB(formats, self.paths),
@@ -285,6 +291,7 @@ class WorkerStatusFormatReportingTest(unittest.TestCase):
             client or FakeClient(),
             False,
             requested_format,
+            do_not_embed_metadata,
         )
         rows = []
         done = []
@@ -342,6 +349,38 @@ class WorkerStatusFormatReportingTest(unittest.TestCase):
         self.assertEqual(rows, [(1, 'skip', 'PDF', '')])
         self.assertEqual(done[0][0], True)
 
+    def test_status_worker_reports_embedded_blob_outdated_in_raw_file_mode(self):
+        embedded_hash = 'e' * 32
+        bound = server_row(
+            embedded_hash,
+            'PDF',
+            calibre_metadata(self.pdf_hash),
+        )
+        client = FakeClient([bound], [cloud_file(embedded_hash, 'PDF')])
+
+        rows, done = self.run_status_worker(['PDF'], client=client)
+
+        self.assertEqual(rows, [(1, 'replace', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+
+    def test_status_worker_accepts_embedded_blob_when_embedding_is_enabled(self):
+        embedded_hash = 'e' * 32
+        bound = server_row(
+            embedded_hash,
+            'PDF',
+            calibre_metadata(self.pdf_hash),
+        )
+        client = FakeClient([bound], [cloud_file(embedded_hash, 'PDF')])
+
+        rows, done = self.run_status_worker(
+            ['PDF'],
+            client=client,
+            do_not_embed_metadata=False,
+        )
+
+        self.assertEqual(rows, [(1, 'skip', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+
     def test_status_worker_requested_format_overrides_bound_format(self):
         bound = server_row(self.pdf_hash, 'PDF', calibre_metadata(self.pdf_hash))
         client = FakeClient([bound], [cloud_file(self.pdf_hash, 'PDF')])
@@ -386,6 +425,7 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
         self.epub_hash = readest_api.partial_md5(self.paths['EPUB'])
         self.pdf_hash = readest_api.partial_md5(self.paths['PDF'])
         self.original_embed = readest_worker._embed_metadata_copy
+        self.embed_calls = []
         readest_worker._embed_metadata_copy = self.embed_metadata_copy
         self.addCleanup(self.restore_embed_metadata_copy)
 
@@ -393,22 +433,38 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
         readest_worker._embed_metadata_copy = self.original_embed
 
     def embed_metadata_copy(self, path, mi, fmt):
+        self.embed_calls.append((path, fmt))
         fd, tmp = tempfile.mkstemp(
             suffix='.' + fmt.lower(), prefix='embedded-', dir=self.tmp.name
         )
         os.close(fd)
         shutil.copyfile(path, tmp)
+        with open(tmp, 'ab') as handle:
+            handle.write(b' embedded metadata')
         return tmp
 
-    def run_push(self, client, requested_format=None):
+    def run_push(
+        self,
+        client,
+        requested_format=None,
+        do_not_embed_metadata=True,
+    ):
         return self.run_push_with_db(
             FakeDB(['EPUB', 'PDF'], self.paths),
             [1],
             client,
             requested_format,
+            do_not_embed_metadata,
         )
 
-    def run_push_with_db(self, db, book_ids, client, requested_format=None):
+    def run_push_with_db(
+        self,
+        db,
+        book_ids,
+        client,
+        requested_format=None,
+        do_not_embed_metadata=True,
+    ):
         worker = PushWorker(
             None,
             db,
@@ -416,6 +472,7 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
             client,
             False,
             requested_format,
+            do_not_embed_metadata,
         )
         rows = []
         done = []
@@ -455,6 +512,67 @@ class WorkerPushFormatBindingTest(unittest.TestCase):
             record['metadata']['identifier'],
             'urn:uuid:cafebabe-0000-0000-0000-000000000001',
         )
+
+    def test_raw_file_mode_is_default_and_uploads_original_bytes(self):
+        client = FakeClient()
+
+        rows, done = self.run_push(client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'uploaded', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(self.embed_calls, [])
+        self.assertEqual(client.uploads[0]['body'], b'pdf bytes')
+        record = client.pushed_batches[0][0]
+        self.assertEqual(record['bookHash'], self.pdf_hash)
+        self.assertEqual(record['metadata']['calibreSourceHash'], self.pdf_hash)
+
+    def test_embedding_can_be_enabled_for_legacy_upload_behavior(self):
+        client = FakeClient()
+
+        rows, done = self.run_push(
+            client,
+            'PDF',
+            do_not_embed_metadata=False,
+        )
+
+        embedded_bytes = b'pdf bytes embedded metadata'
+        embedded_hash = readest_api.partial_md5_bytes(embedded_bytes)
+        self.assertEqual(rows, [(1, 'uploaded', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(self.embed_calls, [(self.paths['PDF'], 'PDF')])
+        self.assertEqual(client.uploads[0]['body'], embedded_bytes)
+        record = client.pushed_batches[0][0]
+        self.assertEqual(record['bookHash'], embedded_hash)
+        self.assertEqual(record['metadata']['calibreSourceHash'], self.pdf_hash)
+        self.assertNotEqual(record['bookHash'], record['metadata']['calibreSourceHash'])
+
+    def test_raw_file_mode_migrates_embedded_row_and_preserves_engagement(self):
+        embedded_hash = 'e' * 32
+        existing = server_row(
+            embedded_hash,
+            'PDF',
+            calibre_metadata(self.pdf_hash),
+            progress=[42, 100],
+            reading_status='reading',
+            reading_status_updated_at='2024-03-01T00:00:00.000Z',
+            group_id='pdf-group',
+            group_name='PDF Group',
+        )
+        client = FakeClient([existing], [cloud_file(embedded_hash, 'PDF')])
+
+        rows, done = self.run_push(client, 'PDF')
+
+        self.assertEqual(rows, [(1, 'replaced', 'PDF', '')])
+        self.assertEqual(done[0][0], True)
+        self.assertEqual(client.uploads[0]['body'], b'pdf bytes')
+        live = [record for record in client.pushed_batches[0] if not record.get('deletedAt')]
+        tombstones = [record for record in client.pushed_batches[0] if record.get('deletedAt')]
+        self.assertEqual(len(live), 1)
+        self.assertEqual(len(tombstones), 1)
+        self.assert_pdf_engagement_preserved(live[0])
+        self.assertEqual(live[0]['metadata']['calibreSourceHash'], self.pdf_hash)
+        self.assertEqual(tombstones[0]['bookHash'], embedded_hash)
+        self.assertIn(embedded_hash, ''.join(client.deleted_files))
 
     def test_requested_format_replaces_existing_uuid_peer_without_duplicate(self):
         old_hash = 'e' * 32

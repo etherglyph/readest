@@ -333,6 +333,36 @@ class PlanPushTest(unittest.TestCase):
         plan = plan_push(row, wire, 'c' * 32, SRC)
         self.assertEqual(plan['action'], 'replace')
 
+    def test_raw_file_mode_replaces_metadata_embedded_blob(self):
+        wire = wire_for(file_hash=SRC)
+        row = synced_row(wire)
+        row['book_hash'] = 'e' * 32
+
+        plan = plan_push(
+            row,
+            wire,
+            'c' * 32,
+            SRC,
+            expected_blob_hash=SRC,
+        )
+
+        self.assertEqual(plan['action'], 'replace')
+
+    def test_raw_file_mode_keeps_blob_matching_source_hash(self):
+        wire = wire_for(file_hash=SRC)
+        row = synced_row(wire)
+        row['book_hash'] = SRC
+
+        plan = plan_push(
+            row,
+            wire,
+            'c' * 32,
+            SRC,
+            expected_blob_hash=SRC,
+        )
+
+        self.assertEqual(plan['action'], 'skip')
+
     def test_v1_row_with_matching_raw_hash_is_not_replaced(self):
         # v1 rows have no calibreSourceHash but their book_hash IS the raw
         # file hash (v1 uploaded the file unmodified).

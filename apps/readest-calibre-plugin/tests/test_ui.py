@@ -110,6 +110,7 @@ readest_config.prefs = {
     'tokens': {'access_token': 'token'},
     'user_email': '',
     'include_custom_columns': False,
+    'do_not_embed_metadata': True,
 }
 readest_config.save_tokens = lambda tokens: None
 readest_dialogs = types.ModuleType('calibre_plugins.readest.dialogs')
@@ -168,6 +169,25 @@ def action_texts(menu):
 
 
 class ReadestMenuTest(unittest.TestCase):
+    def test_run_passes_raw_file_preference_to_dialog(self):
+        plugin = make_plugin([1], {1: ['EPUB']})
+        created = []
+
+        class Dialog:
+            marks = {}
+
+            def __init__(self, *args, **kwargs):
+                created.append((args, kwargs))
+
+            def exec(self):
+                pass
+
+        plugin.apply_marks = lambda marks: None
+        plugin.run_on_selection(Dialog, 'Select books.')
+
+        self.assertEqual(created[0][1]['requested_format'], None)
+        self.assertTrue(created[0][1]['do_not_embed_metadata'])
+
     def test_default_push_keeps_requested_format_unset(self):
         plugin = make_plugin([1], {1: ['EPUB', 'PDF']})
         calls = []

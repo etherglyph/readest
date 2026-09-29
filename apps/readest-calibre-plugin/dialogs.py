@@ -176,7 +176,14 @@ class _RunDialog(QDialog):
         return ''
 
     def __init__(
-        self, parent, db, book_ids, client, include_custom_columns, requested_format=None
+        self,
+        parent,
+        db,
+        book_ids,
+        client,
+        include_custom_columns,
+        requested_format=None,
+        do_not_embed_metadata=True,
     ):
         QDialog.__init__(self, parent)
         self.db = db
@@ -214,7 +221,13 @@ class _RunDialog(QDialog):
         layout.addWidget(self.buttons)
 
         self.worker = self.worker_class(
-            self, db, book_ids, client, include_custom_columns, requested_format
+            self,
+            db,
+            book_ids,
+            client,
+            include_custom_columns,
+            requested_format,
+            do_not_embed_metadata,
         )
         self.worker.progress.connect(self.on_progress)
         self.worker.book_status.connect(self.on_book_status)
