@@ -362,6 +362,28 @@ describe("LibraryStore", function()
             assert.are.equal(1, row.local_present)
             assert.are.equal(T_RECENT, row.updated_at)
         end)
+
+        it("revives a tombstoned book when a later cloud pull is active", function()
+            local tombstone = LibraryStore.parseSyncRow({
+                book_hash = "h1", title = "How to Read a Book", format = "EPUB",
+                deleted_at = "2026-02-15T00:00:00Z",
+            })
+            store:upsertBook(tombstone)
+            assert.are.equal(0, #store:listBooks({}))
+
+            local active = LibraryStore.parseSyncRow({
+                book_hash = "h1", title = "How to Read a Book", format = "EPUB",
+                uploaded_at = "2026-02-16T00:00:00Z",
+                updated_at = "2026-02-16T00:00:00Z",
+            })
+            assert.are.same({ "deleted_at" }, active._clear_fields)
+            store:upsertBook(active)
+
+            local row = store:_getRowRaw("h1")
+            assert.is_nil(row.deleted_at)
+            assert.are.equal(1, row.cloud_present)
+            assert.are.equal(1, #store:listBooks({}))
+        end)
     end)
 
     -- =====================================================================

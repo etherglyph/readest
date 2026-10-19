@@ -822,12 +822,16 @@ function M.parseSyncRow(dbRow)
     -- Cloud-presence flag: tombstones from the cloud arrive with deleted_at
     -- set; the row is still useful for tracking that the cloud copy is gone,
     -- but it doesn't count as cloud-present anymore. Force the flag through
-    -- upsertBook's OR-merge with the sentinel.
+    -- upsertBook's OR-merge with the sentinel. Conversely, an active cloud
+    -- row must explicitly clear a previously pulled tombstone: upsertBook
+    -- preserves omitted fields, so merely leaving deleted_at nil would keep
+    -- the book hidden after the server revives it.
     if out.deleted_at then
         out.cloud_present = 0
         out._force_cloud_present = true
     else
         out.cloud_present = 1
+        out._clear_fields = { "deleted_at" }
     end
 
     return out
