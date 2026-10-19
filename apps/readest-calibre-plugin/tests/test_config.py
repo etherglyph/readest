@@ -5,8 +5,11 @@ import types
 import unittest
 from unittest.mock import patch
 
+from translation_stubs import install_translation_stubs
+
 
 PLUGIN_DIR = os.path.join(os.path.dirname(__file__), '..')
+install_translation_stubs()
 
 
 class _JSONConfig(dict):

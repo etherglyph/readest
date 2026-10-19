@@ -3,6 +3,10 @@ import sys
 import types
 import unittest
 
+from translation_stubs import install_translation_stubs
+
+
+install_translation_stubs()
 PLUGIN_DIR = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, PLUGIN_DIR)
 
