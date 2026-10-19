@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "generated_at": "2026-10-19T14:25:01Z",
+  "generated_timestamp": 1792419901,
+  "plugins": [
+    {
+      "id": 1340661078,
+      "repo_id": 1340661078,
+      "name": "readest",
+      "owner": "etherglyph",
+      "full_name": "etherglyph/readest",
+      "description": "Readest KOReader development prerelease: repairs stale local deletion tombstones when an active cloud book is pulled.",
+      "stars": 0,
+      "stargazers_count": 0,
+      "fork": true,
+      "language": "Lua",
+      "homepage": "https://github.com/etherglyph/readest",
+      "default_branch": "codex/koreader-clear-stale-tombstone",
+      "has_wiki": false,
+      "pushed_at": "2026-10-19T14:24:29Z",
+      "updated_at": "2026-10-19T14:24:29Z",
+      "html_url": "https://github.com/etherglyph/readest",
+      "latest_release": {
+        "tag_name": "v0.12.16-koreader-tombstone.1",
+        "published_at": "2026-10-19T14:24:29Z",
+        "download_url": "https://github.com/etherglyph/readest/releases/download/v0.12.16-koreader-tombstone.1/Readest-0.12.16-koreader-tombstone.1-1.koplugin.zip",
+        "name": "Readest 0.12.16 KOReader tombstone repair 1",
+        "assets": [
+          {
+            "name": "Readest-0.12.16-koreader-tombstone.1-1.koplugin.zip",
+            "browser_download_url": "https://github.com/etherglyph/readest/releases/download/v0.12.16-koreader-tombstone.1/Readest-0.12.16-koreader-tombstone.1-1.koplugin.zip",
+            "size": 5818648,
+            "content_type": "application/zip"
+          }
+        ]
+      },
+      "user_thumbs_up": 0,
+      "user_thumbs_down": 0,
+      "wilson_score": 0
+    }
+  ],
+  "patches": [],
+  "fonts": []
+}
